@@ -1,0 +1,9 @@
+[Unit]
+Description=Craftbeer Pi
+
+[Service]
+WorkingDirectory=/home/{{ user }}
+ExecStart={{ path }} start
+
+[Install]
+WantedBy=multi-user.target

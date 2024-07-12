@@ -1,0 +1,32 @@
+{
+    "data": [
+        {
+            "id": "Dakot5BFVeXUNot4y6rhAx",
+            "name": "aa",
+            "power": 100,
+            "props": {
+                "GPIO": 5,
+                "Initial Power": "150",
+                "Inverted": "No",
+                "SamplingTime": 2
+            },
+            "state": false,
+            "timer": 0,
+            "type": "ArduinoGPIOActor"
+        },
+        {
+            "id": "dtRp4kEBFzVaAG2WSxasUF",
+            "name": "aaa",
+            "power": 0,
+            "props": {
+                "Frequency": "1",
+                "GPIO": 3,
+                "Initial Power": "255",
+                "Inverted": "No"
+            },
+            "state": false,
+            "timer": 0,
+            "type": "ArduinoGPIOPWMActor"
+        }
+    ]
+}
