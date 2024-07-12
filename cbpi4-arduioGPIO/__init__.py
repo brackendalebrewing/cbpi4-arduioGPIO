@@ -38,7 +38,7 @@ async def TelemetrixInitialize():
         logger.error(f"Error. Could not activate Telemetrix: {e}")
         board = None
 
-class ArduinoTelemetrix(CBPiExtension):
+class AtrduinoTelemetrix(CBPiExtension):
     def __init__(self, cbpi):
         self.cbpi = cbpi
         self._task = asyncio.create_task(self.init_actor())
@@ -49,16 +49,23 @@ class ArduinoTelemetrix(CBPiExtension):
 @parameters([Property.Select(label="GPIO", options=ArduinoTypes['Mega']['digital_pins']), Property.Select(label="Inverted", options=["Yes", "No"], description="No: Active on high; Yes: Active on low")])
 class ArduinoGPIOActor(CBPiActor):
 
-    def __init__(self, cbpi, id, props):
-        super().__init__(cbpi, id, props)
-        self.gpio = int(self.props.get('GPIO', 0))
-        self.initial_power = int(self.props.get('Initial Power', 0))
-        self.power = self.initial_power
-        self.state = False
+    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-255]")])
+    async def setpower(self, Power=100, **kwargs):
+        self.power = min(max(int(Power), 0), 255)
+        await self.set_power(self.power)
 
     async def on_start(self):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
+        self.gpio = int(self.props['GPIO'])
+        self.initial_power = int(self.props['Initial Power'])
+        
         try:
             await board.set_pin_mode_analog_output(self.gpio)
+            self.power = self.initial_power
             await board.analog_write(self.gpio, self.power)
             self.state = False
             await self.cbpi.actor.actor_update(self.id, self.power)
@@ -66,12 +73,12 @@ class ArduinoGPIOActor(CBPiActor):
         except Exception as e:
             logger.error(f"Failed to initialize PWM Actor {self.id}: {e}")
 
-    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-255]")])
-    async def setpower(self, Power=100, **kwargs):
-        self.power = min(max(int(Power), 0), 255)
-        await self.set_power(self.power)
-
     async def on(self, power=None):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
         if power is not None:
             self.power = power
         else:
@@ -86,6 +93,11 @@ class ArduinoGPIOActor(CBPiActor):
             logger.error(f"Failed to turn on PWM GPIO {self.gpio}: {e}")
 
     async def off(self):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
         logger.info(f"PWM ACTOR {self.id} OFF - GPIO {self.gpio}")
         
         try:
@@ -96,6 +108,11 @@ class ArduinoGPIOActor(CBPiActor):
             logger.error(f"Failed to turn off PWM GPIO {self.gpio}: {e}")
 
     async def set_power(self, power):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
         if self.state:
             try:
                 await board.analog_write(self.gpio, int(power))
@@ -106,25 +123,39 @@ class ArduinoGPIOActor(CBPiActor):
     def get_state(self):
         return self.state
 
-def setup(cbpi):
-    cbpi.plugin.register("ArduinoGPIOActor", ArduinoGPIOActor)
-    cbpi.plugin.register("ArduinoGPIOPWMActor", ArduinoGPIOPWMActor)
-    cbpi.plugin.register("ArduinoTelemetrix", ArduinoTelemetrix)
+    async def run(self):
+        while self.running:
+            await asyncio.sleep(1)
+
+async def init_all_actors(cbpi):
+    for actor in cbpi.actor.get_all():
+        if isinstance(actor.instance, ArduinoGPIOActor) or isinstance(actor.instance, ArduinoGPIOPWMActor):
+            await actor.instance.on_start()
+    
+
+
 @parameters([
     Property.Select(label="GPIO", options=ArduinoTypes['Mega']['pwm_pins']), 
     Property.Number(label="Initial Power", configurable=True, description="Initial PWM Power (0-255)", default_value=0)
 ])
 class ArduinoGPIOPWMActor(CBPiActor):
-    def __init__(self, cbpi, id, props):
-        super().__init__(cbpi, id, props)
-        self.gpio = int(self.props.get('GPIO', 0))
-        self.initial_power = int(self.props.get('Initial Power', 0))
-        self.power = self.initial_power
-        self.state = False
+    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-255]")])
+    async def setpower(self, Power=100, **kwargs):
+        self.power = min(max(int(Power), 0), 255)
+        await self.set_power(self.power)
 
     async def on_start(self):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
+        self.gpio = int(self.props['GPIO'])
+        self.initial_power = int(self.props['Initial Power'])
+        
         try:
             await board.set_pin_mode_analog_output(self.gpio)
+            self.power = self.initial_power
             await board.analog_write(self.gpio, self.power)
             self.state = False
             await self.cbpi.actor.actor_update(self.id, self.power)
@@ -132,12 +163,12 @@ class ArduinoGPIOPWMActor(CBPiActor):
         except Exception as e:
             logger.error(f"Failed to initialize PWM Actor {self.id}: {e}")
 
-    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-255]")])
-    async def setpower(self, Power=100, **kwargs):
-        self.power = min(max(int(Power), 0), 255)
-        await self.set_power(self.power)
-
     async def on(self, power=None):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
         if power is not None:
             self.power = power
         else:
@@ -152,6 +183,11 @@ class ArduinoGPIOPWMActor(CBPiActor):
             logger.error(f"Failed to turn on PWM GPIO {self.gpio}: {e}")
 
     async def off(self):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
         logger.info(f"PWM ACTOR {self.id} OFF - GPIO {self.gpio}")
         
         try:
@@ -162,6 +198,11 @@ class ArduinoGPIOPWMActor(CBPiActor):
             logger.error(f"Failed to turn off PWM GPIO {self.gpio}: {e}")
 
     async def set_power(self, power):
+        global board
+        if board is None:
+            logger.error("Board not initialized. Re-initializing...")
+            await TelemetrixInitialize()
+        
         if self.state:
             try:
                 await board.analog_write(self.gpio, int(power))
@@ -172,7 +213,18 @@ class ArduinoGPIOPWMActor(CBPiActor):
     def get_state(self):
         return self.state
 
+    async def run(self):
+        while self.running:
+            await asyncio.sleep(1)
+
+async def init_all_actors(cbpi):
+    for actor in cbpi.actor.get_all():
+        if isinstance(actor.instance, ArduinoGPIOActor) or isinstance(actor.instance, ArduinoGPIOPWMActor):
+            await actor.instance.on_start()
+
 def setup(cbpi):
     cbpi.plugin.register("ArduinoGPIOActor", ArduinoGPIOActor)
     cbpi.plugin.register("ArduinoGPIOPWMActor", ArduinoGPIOPWMActor)
-    cbpi.plugin.register("ArduinoTelemetrix", ArduinoTelemetrix)
+    cbpi.plugin.register("AtrduinoTelemetrix", AtrduinoTelemetrix)
+    
+    asyncio.run(init_all_actors(cbpi))
