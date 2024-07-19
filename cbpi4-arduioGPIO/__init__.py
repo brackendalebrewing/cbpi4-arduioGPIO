@@ -55,7 +55,8 @@ class ArduinoTelemetrix(CBPiExtension):
 ])
 class ArduinoGPIOPWMActor(CBPiActor):
     @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-255]")])
-    async def setpower(self, Power=100, **kwargs):
+    
+    async def setpower(self, Power=255, **kwargs):
         self.power = min(max(int(Power), 0), 255)
         await self.set_power(self.power)
 
@@ -66,18 +67,19 @@ class ArduinoGPIOPWMActor(CBPiActor):
         try:
             await board.set_pin_mode_analog_output(self.gpio)
             self.power = self.initial_power
-            await board.analog_write(self.gpio, self.power)
+            #await board.analog_write(self.gpio, self.power)
             self.state = False
             await self.cbpi.actor.actor_update(self.id, self.power)
             logger.info(f"PWM Actor {self.id} initialized successfully with initial power {self.initial_power}.")
         except Exception as e:
             logger.error(f"Failed to initialize PWM Actor {self.id}: {e}")
 
-    async def on(self, power=None):
+    async def on(self, power):
         if power is not None:
             self.power = power
         else:
             self.power = self.initial_power
+            
         logger.info(f"PWM ACTOR {self.id} ON - GPIO {self.gpio} - Power {self.power}")
         
         try:
@@ -93,7 +95,8 @@ class ArduinoGPIOPWMActor(CBPiActor):
         try:
             await board.analog_write(self.gpio, 0)
             self.state = False
-            await self.cbpi.actor.actor_update(self.id, 0)
+            #await self.cbpi.actor.actor_update(self.id, 0)
+            self.state = False
         except Exception as e:
             logger.error(f"Failed to turn off PWM GPIO {self.gpio}: {e}")
 
