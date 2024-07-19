@@ -118,6 +118,7 @@ class ArduinoGPIOPWMActor(CBPiActor):
 @parameters([Property.Select(label="GPIO", options=ArduinoTypes['Mega']['digital_pins']), 
              Property.Select(label="Inverted", options=["Yes", "No"], description="No: Active on high; Yes: Active on low")])
 class ArduinoGPIOActor(CBPiActor):
+    
     async def on_start(self):
         self.gpio = int(self.props.get('GPIO', 0))
         self.inverted = self.props.get('Inverted', 'No') == 'Yes'
@@ -130,13 +131,13 @@ class ArduinoGPIOActor(CBPiActor):
         except Exception as e:
             logger.error(f"Failed to initialize Digital Actor {self.id} on GPIO {self.gpio}: {e}")
 
-    async def on(self, power=None):
+    async def on(self, power):
         try:
             digital_value = 0 if self.inverted else 1
             await board.digital_write(self.gpio, digital_value)
             self.state = True
-            self.power = 255
-            await self.cbpi.actor.actor_update(self.id, self.power)
+            #self.power = 255
+            await self.cbpi.actor.actor_update(self.id, digital_value)
             logger.info(f"Digital Actor {self.id} ON - GPIO {self.gpio} - Value {digital_value}")
         except Exception as e:
             logger.error(f"Failed to turn on Digital Actor {self.id} on GPIO {self.gpio}: {e}")
