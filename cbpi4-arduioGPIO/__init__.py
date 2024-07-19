@@ -119,53 +119,79 @@ class ArduinoGPIOPWMActor(CBPiActor):
              Property.Select(label="Inverted", options=["Yes", "No"], description="No: Active on high; Yes: Active on low")])
 class ArduinoGPIOActor(CBPiActor):
     
+
+
+    # Custom property which can be configured by the user
+    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True,description="Power Setting [0-100]")])
+    async def setpower(self,Power = 255 ,**kwargs):
+        self.power=int(Power)
+        if self.power < 0:
+            self.power = 0
+        if self.power > 255:
+            self.power = 255           
+        await self.set_power(self.power)      
+
+    def get_GPIO_state(self, state):
+        # ON
+        if state == 1:
+            return 1 if self.inverted == False else 0
+        # OFF
+        if state == 0:
+            return 0 if self.inverted == False else 1
+
     async def on_start(self):
-        self.gpio = int(self.props.get('GPIO', 0))
-        self.inverted = self.props.get('Inverted', 'No') == 'Yes'
+        self.power = None
+        self.gpio = self.props.GPIO
+        self.inverted = True if self.props.get("Inverted", "No") == "Yes" else False
+        self.sampleTime = int(self.props.get("SamplingTime", 5)) 
+        await self.set_power(self.power)
+        await board.analog_write(self.gpio, self.get_GPIO_state(0))
         self.state = False
-        self.power = 0
 
-        try:
-            await board.set_pin_mode_digital_output(self.gpio)
-            logger.info(f"Digital Actor {self.id} initialized on GPIO {self.gpio}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Digital Actor {self.id} on GPIO {self.gpio}: {e}")
+    async def on(self, power = None):
+        if power is not None:
+            self.power = power
+        else: 
+            self.power = 255
+#        await self.set_power(self.power)
 
-    async def on(self, power):
-        try:
-            digital_value = 0 if self.inverted else 1
-            await board.digital_write(self.gpio, digital_value)
-            self.state = True
-            #self.power = 255
-            await self.cbpi.actor.actor_update(self.id, digital_value)
-            logger.info(f"Digital Actor {self.id} ON - GPIO {self.gpio} - Value {digital_value}")
-        except Exception as e:
-            logger.error(f"Failed to turn on Digital Actor {self.id} on GPIO {self.gpio}: {e}")
+        logger.info("ACTOR %s ON - GPIO %s " %  (self.id, self.gpio))  
+        await board.digital_write(self.gpio, self.get_GPIO_state(1))
+        self.state = True
 
     async def off(self):
-        try:
-            digital_value = 1 if self.inverted else 0
-            await board.digital_write(self.gpio, digital_value)
-            self.state = False
-            self.power = 0
-            await self.cbpi.actor.actor_update(self.id, self.power)
-            logger.info(f"Digital Actor {self.id} OFF - GPIO {self.gpio} - Value {digital_value}")
-        except Exception as e:
-            logger.error(f"Failed to turn off Digital Actor {self.id} on GPIO {self.gpio}: {e}")
+        logger.info("ACTOR %s OFF - GPIO %s " % (self.id, self.gpio))
+        await board.digital_write(self.gpio, self.get_GPIO_state(0))
+        self.state = False
 
     def get_state(self):
         return self.state
-
-    @action("Set Power", parameters=[])
-    async def setpower(self, **kwargs):
-        if self.state:
-            await self.on()
-        else:
-            await self.off()
-
+    
     async def run(self):
+        while self.running == True:
+            if self.state == True:
+                heating_time=self.sampleTime * (self.power / 100)
+                wait_time=self.sampleTime - heating_time
+                if heating_time > 0:
+                    #logging.info("Heating Time: {}".format(heating_time))
+                    await board.digital_write(self.gpio, self.get_GPIO_state(1))
+                    await asyncio.sleep(heating_time)
+                if wait_time > 0:
+                    #logging.info("Wait Time: {}".format(wait_time))
+                    await board.digital_write(self.gpio, self.get_GPIO_state(0))
+                    await asyncio.sleep(wait_time)
+            else:
+                await asyncio.sleep(1)
+
+    async def set_power(self, power):
+        self.power = power
+        await self.cbpi.actor.actor_update(self.id,power)
         pass
 
+        
+            
+        
+            
 def setup(cbpi):
     cbpi.plugin.register("ArduinoGPIOActor", ArduinoGPIOActor)
     cbpi.plugin.register("ArduinoGPIOPWMActor", ArduinoGPIOPWMActor)
