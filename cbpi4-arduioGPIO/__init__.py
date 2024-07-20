@@ -3,6 +3,8 @@ import logging
 from cbpi.api import CBPiActor, CBPiExtension, Property, action, parameters
 from telemetrix_aio import telemetrix_aio
 
+from .FlowMeters import ADCFlowVolumeSensor,FlowStep,Flowmeter_Config
+
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -137,7 +139,7 @@ class ArduinoGPIOActor(CBPiActor):
             await board.set_pin_mode_digital_output(self.gpio)
             self.state = False
             await self.cbpi.actor.actor_update(self.id, self.power)
-            logger.info(f"GPIO Actor {self.id} initialized successfully with initial power {self.power}.")
+            #logger.info(f"GPIO Actor {self.id} initialized successfully with initial power {self.power}.")
         except Exception as e:
             logger.error(f"Failed to initialize GPIO Actor {self.id}: {e}")
 
@@ -177,7 +179,12 @@ class ArduinoGPIOActor(CBPiActor):
         while self.running:
             await asyncio.sleep(1)
 
+
+
 def setup(cbpi):
+    cbpi.plugin.register("FlowStep", FlowStep)
+    cbpi.plugin.register("ADCFlowVolumeSensor", ADCFlowVolumeSensor)
+    cbpi.plugin.register("Flowmeter_Config", Flowmeter_Config)
     cbpi.plugin.register("ArduinoGPIOActor", ArduinoGPIOActor)
     cbpi.plugin.register("ArduinoGPIOPWMActor", ArduinoGPIOPWMActor)
     cbpi.plugin.register("ArduinoTelemetrix", ArduinoTelemetrix)
