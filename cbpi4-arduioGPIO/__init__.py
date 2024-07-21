@@ -4,6 +4,10 @@ from cbpi.api import CBPiActor, CBPiExtension, Property, action, parameters
 from .TelemetrixAioService import TelemetrixAioService
 from .FlowMeters import ADCFlowVolumeSensor, FlowStep, Flowmeter_Config  # Import the flow meter classes
 
+from .arduinoPWMpump import PumpActor,ardunoPumpVolumeStep,arduinoPumpCoolStep
+
+
+
 logger = logging.getLogger(__name__)
 
 # Define Arduino types
@@ -170,4 +174,9 @@ def setup(cbpi):
     cbpi.plugin.register("Flowmeter_Config", Flowmeter_Config)  # Register Flowmeter Config
     cbpi.plugin.register("ADCFlowVolumeSensor", ADCFlowVolumeSensor)  # Register ADC Flow Volume Sensor
     cbpi.plugin.register("FlowStep", FlowStep)  # Register Flow Step
+    
+    cbpi.plugin.register("PumpActor", PumpActor)
+    cbpi.plugin.register("ardunoPumpVolumeStep", ardunoPumpVolumeStep)
+    cbpi.plugin.register("arduinoPumpCoolStep", arduinoPumpCoolStep)
+    
     cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_gpio_actors(cbpi)))

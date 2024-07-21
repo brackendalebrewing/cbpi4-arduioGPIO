@@ -151,8 +151,10 @@ class ADCFlowVolumeSensor(CBPiSensor):
 
     async def read_adc(self):
         if self.simulation_mode:
-            return random.uniform(0, 1023)  # Simulating 10-bit ADC
-
+            fake =  random.uniform(0, 1023)  # Simulating 10-bit ADC
+            #logger.info (f" ****************  Fake ADC -> {fake} ")
+            return fake
+            
         try:
             return self.current_adc_value
         except AttributeError:
@@ -161,8 +163,12 @@ class ADCFlowVolumeSensor(CBPiSensor):
 
     def adc_to_flow(self, adc_value):
         # Convert ADC value to flow rate (L/min)
-        # This is a placeholder conversion. Adjust based on your flow meter's characteristics
-        return adc_value / 1023 * (60 / self.flow_constant)
+        max_adc_value = 1023
+        max_flow_rate = 24  # Maximum flow rate of your SM6004 flow meter in L/min
+        flow_rate = (adc_value / max_adc_value) * max_flow_rate
+        #logger.info (f" ****************  Flow rate -> {flow_rate} ")
+        return flow_rate
+
 
     async def run(self):
         while self.running:
@@ -177,7 +183,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
 
             if self.sensor_mode == "Flow":
                 if self.display == "Flow, unit/s":
-                    self.value = self.convert(flow_rate / 60)  # Convert to L/s
+                    self.value = self.convert(flow_rate )  
                 else:  # "Total volume"
                     self.value = self.convert(self.total_volume)
             else:  # "Volume" mode
