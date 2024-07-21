@@ -6,6 +6,7 @@ from cbpi.api import *
 from cbpi.api.dataclasses import NotificationAction, NotificationType
 from cbpi.api.dataclasses import Sensor, Kettle, Props
 from cbpi.api.config import ConfigType
+from .TelemetrixAioService import TelemetrixAioService
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,15 @@ class Flowmeter_Config(CBPiExtension):
             except Exception as e:
                 logger.warning('Unable to update database: version')
                 logger.warning(e)
-
+                
+@parameters([
+    Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
+    Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
+    Property.Select(label="Display", options=["Total volume", "Flow, unit/s"], description="What to display"),
+    Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
+    Property.Number(label="Flow Constant", configurable=True, description="Flow constant for the sensor (pulses per liter)", default_value=7.5)
+])
+                
 class ADCFlowVolumeSensor(CBPiSensor):
     def __init__(self, cbpi, id, props):
         super(ADCFlowVolumeSensor, self).__init__(cbpi, id, props)
@@ -125,8 +134,10 @@ class ADCFlowVolumeSensor(CBPiSensor):
     async def on_start(self):
         if not self.simulation_mode:
             try:
-                # Assuming the board is globally accessible
-                await board.set_pin_mode_analog_input(self.adc_pin)
+                # Assuming the board is globally accessible through TelemetrixAioService
+                await TelemetrixAioService.initialize(self.cbpi.config.get)
+                self.board = TelemetrixAioService.get_arduino_instance()
+                await self.board.set_pin_mode_analog_input(self.adc_pin)
                 logger.info(f"ADC pin {self.adc_pin} initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize ADC pin {self.adc_pin}: {str(e)}")
@@ -138,7 +149,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
             return random.uniform(0, 1023)  # Simulating 10-bit ADC
         
         try:
-            value = await board.analog_read(self.adc_pin)
+            value = await self.board.analog_read(self.adc_pin)
             return value
         except Exception as e:
             logger.error(f"Error reading ADC pin {self.adc_pin}: {str(e)}")
