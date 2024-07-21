@@ -14,7 +14,7 @@ class Flowmeter_Config(CBPiExtension):
     def __init__(self, cbpi):
         self.cbpi = cbpi
         self.name = "cbpi4-flowmeter"
-        self.version = "0.0.1"  # Update this with your actual version
+        self.version = "0.0.1"
         self._task = asyncio.create_task(self.init_flowmeter())
 
     async def init_flowmeter(self):
@@ -110,7 +110,7 @@ class Flowmeter_Config(CBPiExtension):
             except Exception as e:
                 logger.warning('Unable to update database: version')
                 logger.warning(e)
-                
+
 @parameters([
     Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
     Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
@@ -118,7 +118,6 @@ class Flowmeter_Config(CBPiExtension):
     Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
     Property.Number(label="Flow Constant", configurable=True, description="Flow constant for the sensor (pulses per liter)", default_value=7.5)
 ])
-                
 class ADCFlowVolumeSensor(CBPiSensor):
     def __init__(self, cbpi, id, props):
         super(ADCFlowVolumeSensor, self).__init__(cbpi, id, props)
@@ -130,6 +129,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
         self.total_volume = 0
         self.last_time = time.time()
         self.flow_constant = float(props.get("Flow Constant", 7.5))  # Pulses per liter
+        self.current_adc_value = 0
 
     async def on_start(self):
         if not self.simulation_mode:
@@ -137,22 +137,26 @@ class ADCFlowVolumeSensor(CBPiSensor):
                 # Assuming the board is globally accessible through TelemetrixAioService
                 await TelemetrixAioService.initialize(self.cbpi.config.get)
                 self.board = TelemetrixAioService.get_arduino_instance()
-                await self.board.set_pin_mode_analog_input(self.adc_pin)
+                await self.board.set_pin_mode_analog_input(self.adc_pin, 5, self.analog_callback)
                 logger.info(f"ADC pin {self.adc_pin} initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize ADC pin {self.adc_pin}: {str(e)}")
         else:
             logger.info("Sensor running in simulation mode")
 
+    async def analog_callback(self, data):
+        self.current_adc_value = data[2]
+        formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(data[3]))
+        logger.info(f'Analog Call Input Callback: pin={data[1]}, Value={data[2]} Time={formatted_time} (Raw Time={data[3]})')
+
     async def read_adc(self):
         if self.simulation_mode:
             return random.uniform(0, 1023)  # Simulating 10-bit ADC
-        
+
         try:
-            value = await self.board.analog_read(self.adc_pin)
-            return value
-        except Exception as e:
-            logger.error(f"Error reading ADC pin {self.adc_pin}: {str(e)}")
+            return self.current_adc_value
+        except AttributeError:
+            logger.error("ADC value not set by callback yet")
             return 0
 
     def adc_to_flow(self, adc_value):
@@ -164,13 +168,13 @@ class ADCFlowVolumeSensor(CBPiSensor):
         while self.running:
             adc_value = await self.read_adc()
             flow_rate = self.adc_to_flow(adc_value)
-            
+
             current_time = time.time()
             time_diff = current_time - self.last_time
             volume_increment = flow_rate * (time_diff / 60)  # Convert to liters
-            
+
             self.total_volume += volume_increment
-            
+
             if self.sensor_mode == "Flow":
                 if self.display == "Flow, unit/s":
                     self.value = self.convert(flow_rate / 60)  # Convert to L/s
@@ -178,7 +182,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
                     self.value = self.convert(self.total_volume)
             else:  # "Volume" mode
                 self.value = self.convert(self.total_volume)
-            
+
             self.push_update(self.value)
             self.last_time = current_time
             await asyncio.sleep(1)
