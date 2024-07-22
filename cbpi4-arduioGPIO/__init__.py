@@ -44,7 +44,7 @@ async def resave_and_reload_gpio_actors(cbpi):
 ])
 class ArduinoGPIOPWMActor(CBPiActor):
     @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-255]")])
-    async def setpower(self, Power=255, **kwargs):
+    async def setpower(self, Power, **kwargs):
         self.power = min(max(int(Power), 0), 255)
         await self.set_power(self.power)
 
@@ -83,15 +83,19 @@ class ArduinoGPIOPWMActor(CBPiActor):
             self.state = False
         except Exception as e:
             logger.error(f"Failed to turn off PWM GPIO {self.gpio}: {e}")
-
+            
     async def set_power(self, power):
-        if self.state:
-            board = TelemetrixAioService.get_arduino_instance()
-            try:
-                await board.analog_write(self.gpio, int(power))
-                await self.cbpi.actor.actor_update(self.id, int(power))
-            except Exception as e:
-                logger.error(f"Failed to set power for PWM GPIO {self.gpio}: {e}")
+        logging.info(" ***************** ArduinoGPIOPWMActor **************** ")
+        #if 1==1:
+        board = TelemetrixAioService.get_arduino_instance()
+        logging.info(" ***************** ArduinoGPIOPWMActor # 2 **************** ")
+        try:
+            await board.analog_write(self.gpio, int(power))
+            await self.cbpi.actor.actor_update(self.id, int(power))
+            logger.info(f"PWM Actor power change {self.id} initialized successfully with initial power {self.initial_power}.")
+        except Exception as e:
+            logger.error(f"Failed to set power for PWM GPIO {self.gpio}: {e}")
+
 
     def get_state(self):
         return self.state
@@ -105,7 +109,7 @@ class ArduinoGPIOPWMActor(CBPiActor):
     Property.Select(label="Inverted", options=["Yes", "No"], description="No: Active on high; Yes: Active on low")
 ])
 class ArduinoGPIOActor(CBPiActor):
-    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-100]")])
+    
     async def setpower(self, Power=255, **kwargs):
         self.power = min(max(int(Power), 0), 255)
         await self.set_power(self.power)
