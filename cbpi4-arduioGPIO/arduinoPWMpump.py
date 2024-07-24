@@ -256,6 +256,26 @@ class ardunoPumpVolumeStep(CBPiStep):
     Property.Actor(label="Pump Actor", description="Arduino Pump Actor"),
     Property.Number("Minimum Flow Threshold", configurable=True, default_value=1.0)
 ])
+
+
+
+@parameters([
+    Property.Number("Setpoint", configurable=True, default_value=18.0),
+    Property.Number("Kp", configurable=True, default_value=2.0),
+    Property.Number("Ki", configurable=True, default_value=5.0),
+    Property.Number("Kd", configurable=True, default_value=1.0),
+    Property.Number("Time Base", configurable=True, default_value=1.0),  # Time base in seconds
+    Property.Number("Power Base", configurable=True, default_value=255),  # Power base
+
+    Property.Sensor(label="Input Sensor", description="Wort Input Sensor"),
+    Property.Sensor(label="Output Sensor", description="Wort Output Sensor"),
+    Property.Sensor(label="Flow Sensor", description="Arduino Flow Sensor"),
+    Property.Sensor(label="Volume Sensor", description="Arduino Volume Sensor"),
+    Property.Actor(label="Pump Actor", description="Arduino Pump Actor"),
+    Property.Number("Minimum Flow Threshold", configurable=True, default_value=1.0)
+])
+
+
 class arduinoPumpCoolStep(CBPiStep):
 
     async def on_start(self):
@@ -267,10 +287,14 @@ class arduinoPumpCoolStep(CBPiStep):
         self.input_temp_sensor_id = self.props.get("Input Sensor")
         self.output_temp_sensor_id = self.props.get("Output Sensor")
         self.flow_sensor_id = self.props.get("Flow Sensor")
-        self.volume_sensor_id = self.props.get("Volume Sensor ID")
-        self.pump_actor_id = self.props.get("Pump Actor ID")
+        self.volume_sensor_id = self.props.get("Volume Sensor")
+        self.pump_actor_id = self.props.get("Pump Actor")
         self.min_flow_threshold = self.props.get("Minimum Flow Threshold")
-        
+
+        # Check if output temperature sensor exists
+        if not self.output_temp_sensor_id:
+            raise Exception("Output temperature sensor is required")
+
         self.pid = PID(self.kp, self.ki, self.kd)
         self.pid.SetPoint = self.setpoint
 
@@ -279,32 +303,37 @@ class arduinoPumpCoolStep(CBPiStep):
         self.flow_sensor = self.api.cache.get("sensors").get(self.flow_sensor_id)
         self.volume_sensor = self.api.cache.get("sensors").get(self.volume_sensor_id)
         self.pump_actor = self.api.cache.get("actors").get(self.pump_actor_id)
-        
-        if not all([self.input_temp_sensor, self.output_temp_sensor, self.flow_sensor, self.volume_sensor, self.pump_actor]):
-            self.api.notify(headline="Initialization Error", message="One or more components could not be retrieved from the cache", timeout=10)
 
     async def execute(self):
         while self.is_running():
             try:
-                input_temp = self.input_temp_sensor.instance.get_value()
                 output_temp = self.output_temp_sensor.instance.get_value()
                 current_flow = self.flow_sensor.instance.get_value()
                 current_volume = self.volume_sensor.instance.get_value()
                 
-                temp_diff = input_temp - output_temp
+                # Check if input temperature sensor exists
+                if self.input_temp_sensor and self.input_temp_sensor.instance:
+                    input_temp = self.input_temp_sensor.instance.get_value()
+                    temp_diff = input_temp - output_temp
+                else:
+                    # If input temperature sensor doesn't exist, use a default value or alternative calculation
+                    temp_diff = 0  # or some other default value
+                
                 pid_output = self.pid.compute(temp_diff)
-                self.pump_actor.instance.set_power(pid_output)
                 
-                self.api.notify(headline="PID Control", message=f"Input Temp: {input_temp}, Output Temp: {output_temp}, Flow: {current_flow}, Volume: {current_volume}, PID Output: {pid_output}", timeout=None)
+                # If temperature is overshooting, ensure minimum flow threshold
+                if temp_diff < 0 and current_flow < self.min_flow_threshold:
+                    pump_power = self.min_flow_threshold
+                else:
+                    pump_power = pid_output
                 
-                if current_flow < self.min_flow_threshold:
-                    self.pump_actor.instance.off()
-                    self.api.notify(headline="Warning", message="Flow rate too low, pump turned off to avoid stall", timeout=10)
+                self.pump_actor.instance.set_power(pump_power)
+                
+                self.api.notify(headline="PID Control", message=f"Output Temp: {output_temp}, Flow: {current_flow}, Volume: {current_volume}, PID Output: {pid_output}, Pump Power: {pump_power}", timeout=None)
                 
                 await asyncio.sleep(0.1)
             except Exception as e:
                 self.api.notify(headline="Execution Error", message=str(e), timeout=10)
-    
 
 
 def setup(cbpi):

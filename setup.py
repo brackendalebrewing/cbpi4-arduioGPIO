@@ -19,5 +19,6 @@ setup(
     ],
     entry_points={
         'cbpi4': ['cbpi4-arduinoGPIO = cbpi4_arduinoGPIO:setup']
-    }
+    },
+    keywords='craftbeerpi4 plugin brewing automation arduino gpio'
 )
