@@ -1,26 +1,24 @@
 import logging
-import time
 import asyncio
+import time
 from cbpi.api import *
 from cbpi.api.config import ConfigType
 from cbpi.api.dataclasses import NotificationAction, NotificationType
 from cbpi.api.dataclasses import Sensor, Kettle, Props
 from .TelemetrixAioService import TelemetrixAioService
-
-logger = logging.getLogger(__name__)
-import logging
-import asyncio
-import time
-from cbpi.api import *
-from cbpi.api.base import CBPiBase
-from cbpi.api.dataclasses import NotificationAction, NotificationType
+from pid import PID  # Assuming pid.py is in the same directory or properly installed
 
 logger = logging.getLogger(__name__)
 
+ArduinoTypes = {
+    "Uno": {"digital_pins": list(range(14)), "pwm_pins": [3, 5, 6, 9, 10, 11], "name": "Uno"},
+    "Nano": {"digital_pins": list(range(14)), "pwm_pins": [3, 5, 6, 9, 10, 11], "name": "Nano"},
+    "Mega": {"digital_pins": list(range(54)), "pwm_pins": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], "name": "Mega"}
+}
 
 
 @parameters([
-    Property.Select(label="GPIO", options=[1,2,3,4,5,6]),
+    Property.Select(label="GPIO", options=ArduinoTypes['Mega']['digital_pins']),
     Property.Number("Initial Flow", configurable=True, default_value=0),
     Property.Number("Kp", configurable=True, default_value=2.0),
     Property.Number("Ki", configurable=True, default_value=5.0),
@@ -30,28 +28,26 @@ logger = logging.getLogger(__name__)
 ])
 class PumpActor(CBPiActor):
 
-    #@action("Set Power", parameters=[Property.Number("Power", configurable=True, description="Power Setting [0-255]")])
-    async def setpower(self, Power=255, **kwargs):
-        power = min(max(int(Power), 0), self.power_base)
-        await self.set_power(power)
-
     async def on_start(self):
         self.initialized = False
         try:
             self.gpio = int(self.props.get('GPIO'))
             self.initial_flow = int(self.props.get('Initial Flow'))
-            self.kp = (self.props.get('Kp'))
-            self.ki = (self.props.get('Ki'))
-            self.kd = (self.props.get('Kd'))
-            self.time_base = (self.props.get('Time Base'))
-            self.power_base = (self.props.get('Power Base'))
+            self.kp = self.props.get('Kp')
+            self.ki = self.props.get('Ki')
+            self.kd = self.props.get('Kd')
+            self.time_base = self.props.get('Time Base')
+            self.power_base = self.props.get('Power Base')
 
             board = TelemetrixAioService.get_arduino_instance()
             if not board:
                 raise Exception("Arduino service not available")
 
             await board.set_pin_mode_analog_output(self.gpio)
-            self.pid = PID(self.kp, self.ki, self.kd, self.time_base)
+            # Initialize the PID controller with the provided gains and setpoint
+            self.pid = PID(Kp=self.kp, Ki=self.ki, Kd=self.kd, sample_time=self.time_base, output_limits=(0, self.power_base))
+            self.pid.setpoint = self.initial_flow
+
             self.state = False
             self.power = self.initial_flow
             await self.cbpi.actor.actor_update(self.id, self.power)
@@ -68,15 +64,17 @@ class PumpActor(CBPiActor):
 
         if power is not None:
             self.power = min(max(int(power), 0), self.power_base)
+            self.pid.setpoint = self.power  # Update PID setpoint if power is provided directly
         else:
             self.power = self.initial_flow
 
         logger.info(f"Pump Actor {self.id} ON - GPIO {self.gpio} - Power {self.power}")
         board = TelemetrixAioService.get_arduino_instance()
         try:
-            await board.analog_write(self.gpio, self.power)
+            output = self.pid(self.power)  # Calculate the PID output
+            await board.analog_write(self.gpio, output)
             self.state = True
-            await self.cbpi.actor.actor_update(self.id, self.power)
+            await self.cbpi.actor.actor_update(self.id, output)
         except Exception as e:
             logger.error(f"Failed to turn on Pump Actor {self.id} - GPIO {self.gpio}: {e}")
 
@@ -94,20 +92,26 @@ class PumpActor(CBPiActor):
         except Exception as e:
             logger.error(f"Failed to turn off Pump Actor {self.id} - GPIO {self.gpio}: {e}")
 
-    async def set_power(self, power):
+    @action("Set Flow Rate", parameters=[Property.Number("Flow Rate", configurable=True, description="Set Flow Rate [0-255]")])
+    async def set_flow_rate(self, Flow_Rate=255):
+        """
+        Action to set the flow rate of the pump.
+        """
         if not self.initialized:
             logger.error(f"Pump Actor {self.id} is not properly initialized.")
             return
 
-        power = min(max(int(power), 0), self.power_base)
-        if self.state:
-            board = TelemetrixAioService.get_arduino_instance()
-            try:
-                await board.analog_write(self.gpio, power)
-                self.power = power
-                await self.cbpi.actor.actor_update(self.id, power)
-            except Exception as e:
-                logger.error(f"Failed to set power for Pump Actor {self.id} - GPIO {self.gpio}: {e}")
+        self.power = min(max(int(Flow_Rate), 0), self.power_base)
+        self.pid.setpoint = self.power  # Update PID setpoint
+
+        logger.info(f"Pump Actor {self.id} Set Flow Rate - GPIO {self.gpio} - Flow Rate {self.power}")
+        board = TelemetrixAioService.get_arduino_instance()
+        try:
+            output = self.pid(self.power)
+            await board.analog_write(self.gpio, output)
+            await self.cbpi.actor.actor_update(self.id, output)
+        except Exception as e:
+            logger.error(f"Failed to set flow rate for Pump Actor {self.id} - GPIO {self.gpio}: {e}")
 
     def get_state(self):
         return self.state
@@ -115,55 +119,10 @@ class PumpActor(CBPiActor):
     async def run(self):
         while self.running:
             if self.initialized and self.state:
-                # Here you can implement PID control logic if needed
+                # Implement any additional logic required during operation
                 pass
             await asyncio.sleep(self.time_base)
 
-class PID:
-    def __init__(self, P, I, D, time_base):
-        self.Kp = P
-        self.Ki = I
-        self.Kd = D
-        self.SetPoint = 0.0
-        self.sample_time = time_base
-        self.current_time = time.time()
-        self.last_time = self.current_time
-        self.clear()
-    
-    def clear(self):
-        self.SetPoint = 0.0
-        self.PTerm = 0.0
-        self.ITerm = 0.0
-        self.DTerm = 0.0
-        self.last_error = 0.0
-        self.int_error = 0.0
-        self.windup_guard = 20.0
-        self.output = 0.0
-    
-    def compute(self, feedback_value):
-        error = self.SetPoint - feedback_value
-        self.current_time = time.time()
-        delta_time = self.current_time - self.last_time
-        delta_error = error - self.last_error
-        
-        if delta_time >= self.sample_time:
-            self.PTerm = self.Kp * error
-            self.ITerm += error * delta_time
-            
-            if self.ITerm < -self.windup_guard:
-                self.ITerm = -self.windup_guard
-            elif self.ITerm > self.windup_guard:
-                self.ITerm = self.windup_guard
-            
-            self.DTerm = 0.0
-            if delta_time > 0:
-                self.DTerm = delta_error / delta_time
-            
-            self.last_time = self.current_time
-            self.last_error = error
-            self.output = self.PTerm + (self.Ki * self.ITerm) + (self.Kd * self.DTerm)
-        
-        return self.output
 
 @parameters([
     Property.Number(label="Volume", description="Volume limit for this step", configurable=True),
@@ -238,25 +197,6 @@ class ardunoPumpVolumeStep(CBPiStep):
             await asyncio.sleep(0.2)
 
         return StepResult.DONE
-    
-    
-
-@parameters([
-    Property.Number("Setpoint", configurable=True, default_value=18.0),
-    Property.Number("Kp", configurable=True, default_value=2.0),
-    Property.Number("Ki", configurable=True, default_value=5.0),
-    Property.Number("Kd", configurable=True, default_value=1.0),
-    Property.Number("Time Base", configurable=True, default_value=1.0),  # Time base in seconds
-    Property.Number("Power Base", configurable=True, default_value=255),  # Power base
-
-    Property.Sensor(label="Input Sensor",description="Wort Input Sensor"),
-    Property.Sensor(label="Output Sensor",description="Wort Output Sensor"),
-    Property.Sensor(label="Flow Sensor",description="Arduino Flow Sensor"),
-    Property.Sensor(label="Volume Sensor",description="Arduino Volume  Sensor"),
-    Property.Actor(label="Pump Actor", description="Arduino Pump Actor"),
-    Property.Number("Minimum Flow Threshold", configurable=True, default_value=1.0)
-])
-
 
 
 @parameters([
@@ -274,8 +214,6 @@ class ardunoPumpVolumeStep(CBPiStep):
     Property.Actor(label="Pump Actor", description="Arduino Pump Actor"),
     Property.Number("Minimum Flow Threshold", configurable=True, default_value=1.0)
 ])
-
-
 class arduinoPumpCoolStep(CBPiStep):
 
     async def on_start(self):
@@ -291,12 +229,12 @@ class arduinoPumpCoolStep(CBPiStep):
         self.pump_actor_id = self.props.get("Pump Actor")
         self.min_flow_threshold = self.props.get("Minimum Flow Threshold")
 
-        # Check if output temperature sensor exists
         if not self.output_temp_sensor_id:
             raise Exception("Output temperature sensor is required")
 
-        self.pid = PID(self.kp, self.ki, self.kd)
-        self.pid.SetPoint = self.setpoint
+        # Use the new PID class
+        self.pid = PID(Kp=self.kp, Ki=self.ki, Kd=self.kd, output_limits=(0, 255))
+        self.pid.setpoint = self.setpoint
 
         self.input_temp_sensor = self.api.cache.get("sensors").get(self.input_temp_sensor_id)
         self.output_temp_sensor = self.api.cache.get("sensors").get(self.output_temp_sensor_id)
@@ -310,27 +248,24 @@ class arduinoPumpCoolStep(CBPiStep):
                 output_temp = self.output_temp_sensor.instance.get_value()
                 current_flow = self.flow_sensor.instance.get_value()
                 current_volume = self.volume_sensor.instance.get_value()
-                
-                # Check if input temperature sensor exists
+
                 if self.input_temp_sensor and self.input_temp_sensor.instance:
                     input_temp = self.input_temp_sensor.instance.get_value()
                     temp_diff = input_temp - output_temp
                 else:
-                    # If input temperature sensor doesn't exist, use a default value or alternative calculation
-                    temp_diff = 0  # or some other default value
-                
-                pid_output = self.pid.compute(temp_diff)
-                
-                # If temperature is overshooting, ensure minimum flow threshold
+                    temp_diff = 0
+
+                pid_output = self.pid(temp_diff)
+
                 if temp_diff < 0 and current_flow < self.min_flow_threshold:
                     pump_power = self.min_flow_threshold
                 else:
                     pump_power = pid_output
-                
+
                 self.pump_actor.instance.set_power(pump_power)
-                
+
                 self.api.notify(headline="PID Control", message=f"Output Temp: {output_temp}, Flow: {current_flow}, Volume: {current_volume}, PID Output: {pid_output}, Pump Power: {pump_power}", timeout=None)
-                
+
                 await asyncio.sleep(0.1)
             except Exception as e:
                 self.api.notify(headline="Execution Error", message=str(e), timeout=10)
