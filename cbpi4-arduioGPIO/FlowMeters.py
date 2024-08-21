@@ -110,14 +110,13 @@ class Flowmeter_Config(CBPiExtension):
             except Exception as e:
                 logger.warning('Unable to update database: version')
                 logger.warning(e)
+                
+
 @parameters([
     Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
     Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
     Property.Select(label="Display", options=["Total volume", "Flow, unit/s"], description="What to display"),
     Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
-    Property.Number(label="Min Voltage", configurable=True, description="Voltage at zero flow (corresponding to 4 mA)", default_value=1.0),
-    Property.Number(label="Max Voltage", configurable=True, description="Voltage at max flow (corresponding to 20 mA)", default_value=5.0),
-    Property.Number(label="Max Flow Rate", configurable=True, description="Maximum flow rate corresponding to the max voltage", default_value=100.0),
     Property.Number(label="Alpha", configurable=True, description="Smoothing factor for EMA (0 < alpha <= 1)", default_value=0.2)
 ])
 class ADCFlowVolumeSensor(CBPiSensor):
@@ -130,12 +129,12 @@ class ADCFlowVolumeSensor(CBPiSensor):
         self.value = 0
         self.total_volume = 0
         self.last_time = time.time()
-        self.min_voltage = float(props.get("Min Voltage", 1.0))
-        self.max_voltage = float(props.get("Max Voltage", 5.0))
-        self.max_flow_rate = float(props.get("Max Flow Rate", 100.0))
         self.alpha = float(props.get("Alpha", 0.2))  # Smoothing factor for EMA
         self.ema_flow_rate = None  # Initialize EMA flow rate as None
         self.current_adc_value = 0
+
+        # Polynomial coefficients for flow rate calculation
+        self.poly_coefficients = [-1.31526155e-06,  2.31059924e-02,  1.35807496e-01]
 
     def update_ema(self, flow_rate):
         if self.ema_flow_rate is None:
@@ -148,7 +147,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
             try:
                 await TelemetrixAioService.initialize(self.cbpi.config.get)
                 self.board = TelemetrixAioService.get_arduino_instance()
-                await self.board.set_pin_mode_analog_input(self.adc_pin, 5, self.analog_callback)
+                await self.board.set_pin_mode_analog_input(self.adc_pin, 1, self.analog_callback)
                 logger.info(f"ADC pin {self.adc_pin} initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize ADC pin {self.adc_pin}: {str(e)}")
@@ -172,33 +171,29 @@ class ADCFlowVolumeSensor(CBPiSensor):
             return 0
 
     def adc_to_flow(self, adc_value):
-        # Convert the ADC value to a voltage
-        adc_voltage = (adc_value / 1023.0) * self.max_voltage
-
-        # Linear interpolation between min_voltage and max_voltage
-        if adc_voltage <= self.min_voltage:
-            flow_rate = 0
-        else:
-            flow_rate = ((adc_voltage - self.min_voltage) / (self.max_voltage - self.min_voltage)) * self.max_flow_rate
-
-        return flow_rate
+        # Calculate the flow rate using the polynomial equation
+        flow_rate = np.polyval(self.poly_coefficients, adc_value)
+        return max(0, flow_rate)  # Ensure flow rate is not negative
 
     async def run(self):
         while self.running:
             adc_value = await self.read_adc()
-            flow_rate = self.adc_to_flow(adc_value)
+            flow_rate = self.adc_to_flow(adc_value)  # Calculate instantaneous flow rate
+
+            # Only use EMA for volume calculation, not for instantaneous flow rate display
             self.update_ema(flow_rate)
 
-            # Use the EMA-calculated flow rate for volume calculation
+            # Volume calculation using EMA-smoothed flow rate
             current_time = time.time()
             time_diff = current_time - self.last_time
             volume_increment = self.ema_flow_rate * (time_diff / 60)  # Convert to liters
 
             self.total_volume += volume_increment
 
+            # Display logic
             if self.sensor_mode == "Flow":
                 if self.display == "Flow, unit/s":
-                    self.value = self.convert(self.ema_flow_rate)
+                    self.value = self.convert(flow_rate)  # Use raw instantaneous flow rate for display
                 else:  # "Total volume"
                     self.value = self.convert(self.total_volume)
             else:  # "Volume" mode
@@ -227,7 +222,6 @@ class ADCFlowVolumeSensor(CBPiSensor):
         self.ema_flow_rate = None  # Reset the EMA calculation
         logger.info("Flow sensor reset")
         return "OK"
-
 
 @parameters([
     Property.Number(label="Volume", description="Volume limit for this step", configurable=True),
