@@ -6,6 +6,7 @@ from cbpi.api import *
 from cbpi.api.dataclasses import NotificationAction, NotificationType
 from cbpi.api.dataclasses import Sensor, Kettle, Props
 from cbpi.api.config import ConfigType
+import numpy as np
 from .TelemetrixAioService import TelemetrixAioService
 
 logger = logging.getLogger(__name__)
