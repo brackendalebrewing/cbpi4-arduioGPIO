@@ -53,23 +53,29 @@ class ArduinoGPIOPWMActor(CBPiActor):
         self.power = 0
         self.output = 0
         self.state = False
+        logger.debug(f"Initialized ArduinoGPIOPWMActor: gpio={self.gpio}, initial_power={self.initial_power}, maxoutput={self.maxoutput}")
 
-    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-100% or beyond]")])
-    async def setpower(self, Power=100, **kwargs):
-        self.power = int(Power)
-        # If power exceeds 100%, treat it as a scalar for direct output calculation
+   # Custom property which can be configured by the user
+    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-100]")])
+    async def setpower(self,Power  ,**kwargs):
+        self.power=int(Power)
+        if self.power < 0:
+            self.power = 0
         if self.power > 100:
-            self.output = round(self.maxoutput * self.power / 100)
-        else:
-            self.output = round(self.maxoutput * min(100, self.power) / 100)
-        await self.set_power(self.output)
+            self.power = 100
+        self.output=round(self.maxoutput*self.power/100)
+        await self.set_power(self.power)
+        logger.debug(f"setpower: power={self.power}, output={self.output}")
 
     @action("Set Output", parameters=[Property.Number(label="Output", configurable=True, description="Output Setting [0-MaxOutput]")])
-    async def setoutput(self, Output=100, **kwargs):
-        self.output = int(Output)
-        self.output = max(0, min(self.maxoutput, self.output))  # Clamp to 0-MaxOutput
-        self.power = round(100 * self.output / self.maxoutput)
-        await self.set_power(self.output)
+    async def setoutput(self,Output  ,**kwargs):
+        self.output=int(Output)
+        if self.output < 0:
+            self.output = 0
+        if self.output > self.maxoutput:
+            self.output = self.maxoutput
+        await self.set_output(self.output)
+        logger.info(f"setoutput: power={self.power}, output={self.output}")
 
     async def on_start(self):
         board = TelemetrixAioService.get_arduino_instance()
@@ -82,14 +88,25 @@ class ArduinoGPIOPWMActor(CBPiActor):
             logger.info(f"PWM Actor {self.id} initialized successfully with initial power {self.initial_power}.")
         except Exception as e:
             logger.error(f"Failed to initialize PWM Actor {self.id}: {e}")
-
+            
+            
+            
+            
+            
+            
     async def on(self, power=None, output=None):
         if power is not None:
-            self.power = round(min(100, max(0, power)))
-            self.output = round(self.maxoutput * self.power / 100)
+            if power != self.power:
+                power = min(100, power)
+                power = max(0, power)
+                self.power = round(power)
         if output is not None:
-            self.output = round(min(self.maxoutput, max(0, output)))
-            self.power = round(100 * self.output / self.maxoutput)
+            if output != self.output:
+                output = min(self.maxoutput, output)
+                output = max(0, output)
+                self.output = round(output)
+        self.state = True
+        pass            
         logger.info(f"PWM ACTOR {self.id} ON - GPIO {self.gpio} - Power {self.power}% - Output {self.output}")
         board = TelemetrixAioService.get_arduino_instance()
         try:
@@ -109,7 +126,7 @@ class ArduinoGPIOPWMActor(CBPiActor):
             logger.error(f"Failed to turn off PWM GPIO {self.gpio}: {e}")
 
     async def set_power(self, output):
-        logging.info(f"Setting power for PWM ACTOR {self.id} - GPIO {self.gpio} to {output}")
+        logger.info(f"Setting power for PWM ACTOR {self.id} - GPIO {self.gpio} to {output}")
         board = TelemetrixAioService.get_arduino_instance()
         try:
             await board.analog_write(self.gpio, output)
@@ -117,14 +134,26 @@ class ArduinoGPIOPWMActor(CBPiActor):
             logger.info(f"PWM Actor {self.id} power set to {output}.")
         except Exception as e:
             logger.error(f"Failed to set power for PWM GPIO {self.gpio}: {e}")
+            
+    async def set_output(self, output):
+        self.output = round(output)
+        self.power=round(self.output/self.maxoutput*100)
+        if self.state == True:
+            await self.on(self.power, self.output)
+        else:
+            await self.off()
+        await self.cbpi.actor.actor_update(self.id,self.power, self.output)
+        pass            
 
     def get_state(self):
+        logger.debug(f"get_state called, returning {self.state}")
         return self.state
 
     async def run(self):
+        logger.debug("Entering run loop")
         while self.running:
+            logger.debug(f"Running loop: state={self.state}, power={self.power}, output={self.output}")
             await asyncio.sleep(1)
-
 @parameters([
     Property.Select(label="GPIO", options=ArduinoTypes['Mega']['digital_pins']), 
     Property.Select(label="Inverted", options=["Yes", "No"], description="No: Active on high; Yes: Active on low")
