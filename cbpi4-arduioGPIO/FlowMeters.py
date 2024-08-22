@@ -9,6 +9,8 @@ from cbpi.api.config import ConfigType
 import numpy as np
 from .TelemetrixAioService import TelemetrixAioService
 
+from .shared import flowmeter_data 
+
 logger = logging.getLogger(__name__)
 
 class Flowmeter_Config(CBPiExtension):
@@ -113,6 +115,9 @@ class Flowmeter_Config(CBPiExtension):
                 logger.warning(e)
                 
 
+
+
+
 @parameters([
     Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
     Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
@@ -158,7 +163,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
     async def analog_callback(self, data):
         self.current_adc_value = data[2]
         formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(data[3]))
-        logger.info(f'Analog Call Input Callback: pin={data[1]}, Value={data[2]} Time={formatted_time} (Raw Time={data[3]})')
+        logger.debug(f'Analog Call Input Callback: pin={data[1]}, Value={data[2]} Time={formatted_time} (Raw Time={data[3]})')
 
     async def read_adc(self):
         if self.simulation_mode:
@@ -199,6 +204,9 @@ class ADCFlowVolumeSensor(CBPiSensor):
                     self.value = self.convert(self.total_volume)
             else:  # "Volume" mode
                 self.value = self.convert(self.total_volume)
+
+            # Update the global dictionary with the latest flow rate
+            flowmeter_data[self.id] = flow_rate
 
             self.push_update(self.value)
             self.last_time = current_time

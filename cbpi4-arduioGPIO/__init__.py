@@ -4,7 +4,9 @@ from cbpi.api import CBPiActor, CBPiExtension, Property, action, parameters
 from .TelemetrixAioService import TelemetrixAioService
 from .FlowMeters import ADCFlowVolumeSensor, FlowStep, Flowmeter_Config  # Import the flow meter classes
 
-from .arduinoPWMpump import PumpActor,ardunoPumpVolumeStep,arduinoPumpCoolStep
+from .arduinoPWMpump import PumpActor,ardunoPumpVolumeStep,arduinoPumpCoolStep,SimplePumpActor
+
+
 
 
 
@@ -90,10 +92,6 @@ class ArduinoGPIOPWMActor(CBPiActor):
             logger.error(f"Failed to initialize PWM Actor {self.id}: {e}")
             
             
-            
-            
-            
-            
     async def on(self, power=None, output=None):
         if power is not None:
             if power != self.power:
@@ -154,6 +152,9 @@ class ArduinoGPIOPWMActor(CBPiActor):
         while self.running:
             logger.debug(f"Running loop: state={self.state}, power={self.power}, output={self.output}")
             await asyncio.sleep(1)
+            
+            
+            
 @parameters([
     Property.Select(label="GPIO", options=ArduinoTypes['Mega']['digital_pins']), 
     Property.Select(label="Inverted", options=["Yes", "No"], description="No: Active on high; Yes: Active on low")
@@ -232,5 +233,7 @@ def setup(cbpi):
     cbpi.plugin.register("PumpActor", PumpActor)
     cbpi.plugin.register("ardunoPumpVolumeStep", ardunoPumpVolumeStep)
     cbpi.plugin.register("arduinoPumpCoolStep", arduinoPumpCoolStep)
+    
+    cbpi.plugin.register("SimplePumpActor", SimplePumpActor)
     
     cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_gpio_actors(cbpi)))

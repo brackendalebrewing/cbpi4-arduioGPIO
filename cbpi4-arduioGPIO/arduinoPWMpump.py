@@ -9,6 +9,9 @@ from cbpi.api.dataclasses import Sensor, Kettle, Props
 from .TelemetrixAioService import TelemetrixAioService
 from .pid import PID  # Assuming pid.py is in the same directory or properly installed
 
+from .shared import flowmeter_data 
+
+
 logger = logging.getLogger(__name__)
 
 ArduinoTypes = {
@@ -16,6 +19,131 @@ ArduinoTypes = {
     "Nano": {"digital_pins": list(range(14)), "pwm_pins": [3, 5, 6, 9, 10, 11], "name": "Nano"},
     "Mega": {"digital_pins": list(range(54)), "pwm_pins": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], "name": "Mega"}
 }
+# Assuming the global dictionary is defined in the same module or imported
+# from your flowmeter module
+# from your_module import flowmeter_data
+
+@parameters([
+    Property.Select(label="GPIO", options=ArduinoTypes['Mega']['pwm_pins']),
+    Property.Number(label="Initial Power", configurable=True, description="Initial PWM Power (0-255)", default_value=0),
+    Property.Number(label="MaxOutput", configurable=True, description="Max Output Value", default_value=255),
+    Property.Text(label="Flowmeter Sensor ID", configurable=True, description="Enter Flowmeter Sensor ID")
+])
+class SimplePumpActor(CBPiActor):
+    def __init__(self, cbpi, id, props):
+        super().__init__(cbpi, id, props)
+        self.gpio = int(self.props['GPIO'])
+        self.initial_power = int(self.props['Initial Power'])
+        self.maxoutput = int(self.props.get("MaxOutput", 255))  # Default to 255 if not specified
+        self.flowmeter_id = self.props['Flowmeter Sensor ID']  # Store the Flowmeter Sensor ID entered by the user
+        self.power = 0
+        self.output = 0
+        self.state = False
+        logger.debug(f"Initialized SimplePumpActor: gpio={self.gpio}, initial_power={self.initial_power}, maxoutput={self.maxoutput}, flowmeter_id={self.flowmeter_id}")
+
+    @action("Set Power", parameters=[Property.Number(label="Power", configurable=True, description="Power Setting [0-100]")])
+    async def setpower(self, Power, **kwargs):
+        self.power = int(Power)
+        if self.power < 0:
+            self.power = 0
+        if self.power > 100:
+            self.power = 100
+        self.output = round(self.maxoutput * self.power / 100)
+        await self.set_power(self.output)
+        logger.debug(f"setpower: power={self.power}, output={self.output}")
+
+    @action("Set Output", parameters=[Property.Number(label="Output", configurable=True, description="Output Setting [0-MaxOutput]")])
+    async def setoutput(self, Output, **kwargs):
+        self.output = int(Output)
+        if self.output < 0:
+            self.output = 0
+        if self.output > self.maxoutput:
+            self.output = self.maxoutput
+        await self.set_output(self.output)
+        logger.info(f"setoutput: power={self.power}, output={self.output}")
+
+    async def on_start(self):
+        board = TelemetrixAioService.get_arduino_instance()
+        try:
+            await board.set_pin_mode_analog_output(self.gpio)
+            self.power = self.initial_power
+            self.output = round(self.maxoutput * self.power / 100)
+            self.state = False
+            await self.cbpi.actor.actor_update(self.id, self.power)
+            logger.info(f"PWM Actor {self.id} initialized successfully with initial power {self.initial_power} and flowmeter ID {self.flowmeter_id}.")
+        except Exception as e:
+            logger.error(f"Failed to initialize PWM Actor {self.id}: {e}")
+
+    async def on(self, power=None, output=None):
+        if power is not None:
+            if power != self.power:
+                power = min(100, power)
+                power = max(0, power)
+                self.power = round(power)
+        if output is not None:
+            if output != self.output:
+                output = min(self.maxoutput, output)
+                output = max(0, output)
+                self.output = round(output)
+        self.state = True
+        logger.info(f"PWM ACTOR {self.id} ON - GPIO {self.gpio} - Power {self.power}% - Output {self.output}")
+        board = TelemetrixAioService.get_arduino_instance()
+        try:
+            await board.analog_write(self.gpio, self.output)
+            self.state = True
+            await self.cbpi.actor.actor_update(self.id, self.power)
+        except Exception as e:
+            logger.error(f"Failed to turn on PWM GPIO {self.gpio}: {e}")
+
+    async def off(self):
+        logger.info(f"PWM ACTOR {self.id} OFF - GPIO {self.gpio}")
+        board = TelemetrixAioService.get_arduino_instance()
+        try:
+            await board.analog_write(self.gpio, 0)
+            self.state = False
+        except Exception as e:
+            logger.error(f"Failed to turn off PWM GPIO {self.gpio}: {e}")
+
+    async def set_power(self, output):
+        logger.info(f"Setting power for PWM ACTOR {self.id} - GPIO {self.gpio} to {output}")
+        board = TelemetrixAioService.get_arduino_instance()
+        try:
+            await board.analog_write(self.gpio, output)
+            await self.cbpi.actor.actor_update(self.id, round(100 * output / self.maxoutput))
+            logger.info(f"PWM Actor {self.id} power set to {output}.")
+        except Exception as e:
+            logger.error(f"Failed to set power for PWM GPIO {self.gpio}: {e}")
+
+    async def set_output(self, output):
+        self.output = round(output)
+        self.power = round(self.output / self.maxoutput * 100)
+        if self.state is True:
+            await self.on(self.power, self.output)
+        else:
+            await self.off()
+        await self.cbpi.actor.actor_update(self.id, self.power, self.output)
+
+    def get_state(self):
+        logger.debug(f"get_state called, returning {self.state}")
+        return self.state
+
+    async def run(self):
+        logger.debug("Entering run loop")
+        while self.running:
+            try:
+                # Fetch the flow rate from the global dictionary using the flowmeter ID
+                flow_rate = flowmeter_data.get(self.flowmeter_id, None)
+                if flow_rate is not None:
+                    logger.info(f"Flow Rate for Sensor ID {self.flowmeter_id}: {flow_rate} L/min")
+                else:
+                    logger.warning(f"No data available for Sensor ID {self.flowmeter_id}")
+            except Exception as e:
+                logger.error(f"Failed to retrieve flow rate for Sensor ID {self.flowmeter_id}: {e}")
+            
+            logger.debug(f"Running loop: state={self.state}, power={self.power}, output={self.output}, flow_rate={flow_rate}")
+            await asyncio.sleep(1)
+
+
 
 @parameters([
     Property.Select(label="Power GPIO", options=ArduinoTypes['Mega']['digital_pins']),
@@ -25,7 +153,8 @@ ArduinoTypes = {
     Property.Number("Ki", configurable=True, default_value=5.0),
     Property.Number("Kd", configurable=True, default_value=1.0),
     Property.Number("Time Base", configurable=True, default_value=1.0),  # Time base in seconds
-    Property.Number("MaxOutput", configurable=True, default_value=255)  # MaxOutput parameter for finer control
+    Property.Number("MaxOutput", configurable=True, default_value=255),  # MaxOutput parameter for finer control
+    Property.Text(label="Flow Meter Sensor ID", configurable=True, description="Enter the ID of the Flow Meter sensor to use")  # Flow meter sensor ID
 ])
 class PumpActor(CBPiActor):
 
@@ -40,6 +169,7 @@ class PumpActor(CBPiActor):
             self.kd = self.props.get('Kd')
             self.time_base = self.props.get('Time Base')
             self.maxoutput = int(self.props.get('MaxOutput', 255))  # Initialize MaxOutput
+            self.flow_meter_sensor_id = self.props.get('Flow Meter Sensor ID')  # Get flow meter sensor ID from the text field
 
             board = TelemetrixAioService.get_arduino_instance()
             if not board:
@@ -70,8 +200,6 @@ class PumpActor(CBPiActor):
             power = min(100, power)
             power = max(0, power)
             self.power = round(power)
-            # Convert power to output based on your logic, if needed
-            # Example: self.output = int((self.power / 100) * self.maxoutput)
 
         board = TelemetrixAioService.get_arduino_instance()
         try:
@@ -101,13 +229,17 @@ class PumpActor(CBPiActor):
             logger.error(f"Failed to turn off Pump Actor {self.id} - Power GPIO {self.power_gpio}: {e}")
 
     @action("Set Flow Rate", parameters=[Property.Number(label="Flow Rate", configurable=True, description="Set Flow Rate [0-MaxOutput]")])
-    async def set_flow_rate(self, Flow_Rate=255):
+    async def set_flow_rate(self, Flow_Rate=None):
         """
         Action to set the flow rate of the pump.
         """
         if not self.initialized:
             logger.error(f"Pump Actor {self.id} is not properly initialized.")
             return
+
+        # Use Initial Flow as the default if no flow rate is provided
+        if Flow_Rate is None:
+            Flow_Rate = self.initial_flow
 
         self.output = min(max(int(Flow_Rate), 0), self.maxoutput)
         self.pid.setpoint = self.output  # Update PID setpoint
@@ -127,10 +259,24 @@ class PumpActor(CBPiActor):
     async def run(self):
         while self.running:
             if self.initialized and self.state:
-                # Implement any additional logic required during operation
-                pass
-            await asyncio.sleep(self.time_base)
+                # Directly access the current flow rate from the flow meter sensor using the sensor ID
+                try:
+                    current_flow = await self.cbpi.sensor.get_sensor_value(int(self.flow_meter_sensor_id))
+                    if current_flow is not None:
+                        # Calculate the new output using the PID controller
+                        self.output = self.pid(current_flow)
+                        self.output = min(max(int(self.output), 0), self.maxoutput)
 
+                        board = TelemetrixAioService.get_arduino_instance()
+                        await board.analog_write(self.power_gpio, self.output)
+                        await self.cbpi.actor.actor_update(self.id, self.output)
+                        logger.info(f"Pump Actor {self.id} adjusting output to {self.output} based on flow rate {current_flow}.")
+                except Exception as e:
+                    logger.error(f"Failed to adjust pump output based on flow meter input for Pump Actor {self.id}: {e}")
+
+            await asyncio.sleep(self.time_base)
+            
+            
 
 @parameters([
     Property.Number(label="Volume", description="Volume limit for this step", configurable=True),
