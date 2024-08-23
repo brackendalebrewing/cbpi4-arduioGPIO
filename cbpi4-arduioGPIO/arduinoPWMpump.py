@@ -40,16 +40,17 @@ class SimplePumpActor(CBPiActor):
         self.initial_power = int(self.props['Initial Power'])
         self.maxoutput = int(self.props.get("MaxOutput", 255))  # Default to 255 if not specified
         self.flowmeter_id = self.props['Flowmeter Sensor ID']  # Store the Flowmeter Sensor ID entered by the user
-        self.kp = self.props.get("Kp", 2.0)
-        self.ki = self.props.get("Ki", 5.0)
-        self.kd = self.props.get("Kd", 1.0)
-        self.time_base = self.props.get("Time Base", 1.0)
+        self.kp = float(self.props.get("Kp", 2.0))
+        self.ki = float(self.props.get("Ki", 5.0))
+        self.kd = float(self.props.get("Kd", 1.0))
+        self.time_base = float(self.props.get("Time Base", 1.0))
+
         self.power = 0
         self.output = 0
         self.state = False
 
         # Initialize the PID controller once
-        self.pid = PID(self.kp, self.ki, self.kd, setpoint=0)
+        self.pid = PID(self.kp, self.ki, self.kd, setpoint=2)
         self.pid.sample_time = self.time_base
         self.pid.output_limits = (0, self.maxoutput)
 
@@ -67,7 +68,8 @@ class SimplePumpActor(CBPiActor):
         self.pid.setpoint = setpoint
 
         # Calculate the output using the current flow rate
-        output = self.pid(flow_rate)
+        output = self.pid(float(flow_rate))
+        #output = 175 #self.pid( float(flow_rate) )
 
         # Info-level logging to track the PID calculation process
         logger.info(f"PID Calculation: setpoint={setpoint}, flow_rate={flow_rate}")
@@ -170,9 +172,9 @@ class SimplePumpActor(CBPiActor):
                 flow_rate = flowmeter_data.get(self.flowmeter_id, None)
                 setpoint = 10 
                 if flow_rate is not None:
-                    logger.info(f"Flow Rate for Sensor ID {self.flowmeter_id}: {flow_rate} L/min")
-                    #pid_output = self.calculate_pid_output(flow_rate, setpoint)
-                    #await self.set_output(pid_output)
+                    logger.info(f"Flow Rate--> {flow_rate} L/min")
+                    pid_output = self.calculate_pid_output(float(flow_rate),float( setpoint) )
+                    await self.set_output(pid_output)
                 else:
                     logger.warning(f"No data available for Sensor ID {self.flowmeter_id}")
             except Exception as e:
