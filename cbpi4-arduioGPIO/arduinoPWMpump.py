@@ -48,10 +48,13 @@ class SimplePumpActor(CBPiActor):
         self.power = 0
         self.output = 0
         self.state = False
+        self.flowSet =2
+        
 
         # Initialize the PID controller once
         self.pid = PID(self.kp, self.ki, self.kd, 2)
         
+        self.pid.setpoint = self.flowSet 
         self.pid.sample_time = self.time_base
         self.pid.output_limits = (0, self.maxoutput)
 
@@ -79,19 +82,16 @@ class SimplePumpActor(CBPiActor):
         await self.set_output(self.output)
         logger.info(f"setoutput: power={self.power}, output={self.output}")
         
-    @action("Set Flow Rate Setpoint", parameters=[Property.Number(label="Flow Rate Setpoint", configurable=True, description="Desired Flow Rate Setpoint")])
-    async def set_flow_rate_setpoint(self, Flow_Rate_Setpoint, **kwargs):
-        """
-        Action to set the flow rate setpoint for the PID controller.
-
-        :param Flow_Rate_Setpoint: The desired flow rate setpoint (target value)
-        """
-    try:
-        #self.pid.setpoint = float(Flow_Rate_Setpoint)
-        logger.info(f"Flow Rate Setpoint updated to {self.pid.setpoint} L/min for PID control.")
-    except Exception as e:
-        logger.error(f"Failed to set Flow Rate Setpoint: {e}")
-        
+    @action("Set Flow Rate Setpoint", parameters=[Property.Number(label="Flow_Rate_Setpoint", configurable=True, description="Desired Flow Rate Setpoint")])
+    async def set_flow_rate_setpoint(self, Flow_Rate_Setpoint = 2, **kwargs):
+  
+        try:
+            self.pid.setpoint = float(Flow_Rate_Setpoint)
+            #self.flowSet = Flow_Rate_Setpoint
+            logger.info(f"Flow Rate Setpoint updated to {self.pid.setpoint} L/min for PID control.")
+        except Exception as e:
+            logger.error(f"Failed to set Flow Rate Setpoint: {e}")
+            
 
     async def on_start(self):
         board = TelemetrixAioService.get_arduino_instance()
@@ -198,7 +198,7 @@ class SimplePumpActor(CBPiActor):
         while self.running:
 
             flow_rate = 5
-            setpoint = 10
+            setpoint = self.pid.setpoint 
             if self.get_state():
                 flow_rate = flowmeter_data.get(self.flowmeter_id, None)
                 logger.info(f" +++++++++++++++++++++++++++++++++++++++++++ Flow Rate--> {flow_rate} L/min")
