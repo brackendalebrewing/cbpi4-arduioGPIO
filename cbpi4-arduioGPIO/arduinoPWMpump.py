@@ -180,31 +180,26 @@ class SimplePumpActor(CBPiActor):
         output = pid_output # = 175 #self.pid( float(flow_rate) )
 
         # Info-level logging to track the PID calculation process
-        logger.info(f"PID Calculation: setpoint={setpoint}, flow_rate={flow_rate}")
-        logger.info(f"PID Constants: Kp={self.kp}, Ki={self.ki}, Kd={self.kd}, Time Base={self.time_base}")
-        logger.info(f"PID Output: {pid_output} (Output range: 0-{self.maxoutput})")
+        logger.debug(f"PID Calculation: setpoint={setpoint}, flow_rate={flow_rate}")
+        logger.debug(f"PID Constants: Kp={self.kp}, Ki={self.ki}, Kd={self.kd}, Time Base={self.time_base}")
+        logger.debug(f"PID Output: {pid_output} (Output range: 0-{self.maxoutput})")
 
         return output            
             
 
     async def run(self):
         logger.debug("Entering run loop")
-        flow_rate = 5
-        setpoint = 6
         flow_rate = flowmeter_data.get(self.flowmeter_id, None)
-        logger.info(f" +++++++++++++++++++++++++++++++++++++++++++ Flow Rate--> {flow_rate} L/min")
-        
-        
         while self.running:
 
             flow_rate = 5
             setpoint = self.pid.setpoint 
             if self.get_state():
                 flow_rate = flowmeter_data.get(self.flowmeter_id, None)
-                logger.info(f" +++++++++++++++++++++++++++++++++++++++++++ Flow Rate--> {flow_rate} L/min")
+                logger.debug(f" +++++++++++++++++++++++++++++++++++++++++++ Flow Rate--> {flow_rate} L/min")
                 pid_output = self.calculate_pid_output(float(flow_rate),float( setpoint) )
                 await self.set_output(pid_output)
-                logger.info(f"Running loop: state={self.state}, power={self.power}, output={self.output}")
+                logger.debug(f"Running loop: state={self.state}, power={self.power}, output={self.output}")
                 
             await asyncio.sleep(1)
             
