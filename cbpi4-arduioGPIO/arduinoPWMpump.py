@@ -78,6 +78,20 @@ class SimplePumpActor(CBPiActor):
             self.output = self.maxoutput
         await self.set_output(self.output)
         logger.info(f"setoutput: power={self.power}, output={self.output}")
+        
+    @action("Set Flow Rate Setpoint", parameters=[Property.Number(label="Flow Rate Setpoint", configurable=True, description="Desired Flow Rate Setpoint")])
+    async def set_flow_rate_setpoint(self, Flow_Rate_Setpoint, **kwargs):
+        """
+        Action to set the flow rate setpoint for the PID controller.
+
+        :param Flow_Rate_Setpoint: The desired flow rate setpoint (target value)
+        """
+    try:
+        #self.pid.setpoint = float(Flow_Rate_Setpoint)
+        logger.info(f"Flow Rate Setpoint updated to {self.pid.setpoint} L/min for PID control.")
+    except Exception as e:
+        logger.error(f"Failed to set Flow Rate Setpoint: {e}")
+        
 
     async def on_start(self):
         board = TelemetrixAioService.get_arduino_instance()
