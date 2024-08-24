@@ -47,6 +47,7 @@ async def resave_and_reload_gpio_actors(cbpi):
     Property.Number(label="MaxOutput", configurable=True, description="Max Output Value", default_value=255)
 ])
 class ArduinoGPIOPWMActor(CBPiActor):
+    
     def __init__(self, cbpi, id, props):
         super().__init__(cbpi, id, props)
         self.gpio = int(self.props['GPIO'])
