@@ -26,19 +26,31 @@ class ArduinoTelemetrix(CBPiExtension):
 
     async def init_actor(self):
         await TelemetrixAioService.init_service(self.cbpi)
-        await resave_and_reload_gpio_actors(self.cbpi)
+        await resave_and_reload_sensors_and_gpio_actors(self.cbpi)
 
-async def resave_and_reload_gpio_actors(cbpi):
+async def resave_and_reload_sensors_and_gpio_actors(cbpi):
     try:
+        # Process GPIO Actors
         gpio_actors = [actor for actor in cbpi.actor.data if isinstance(actor.instance, (ArduinoGPIOActor, ArduinoGPIOPWMActor))]
         for actor in gpio_actors:
-            logging.info(f"Processing Actor {actor.id}")
+            logging.info(f"Processing GPIO Actor {actor.id}")
             await actor.instance.on_start()
+
+        # Process ADC Flow Volume Sensors
+        adc_sensors = [sensor for sensor in cbpi.sensor.data if isinstance(sensor.instance, ADCFlowVolumeSensor)]
+        for sensor in adc_sensors:
+            logging.info(f"Processing ADC Flow Volume Sensor {sensor.id}")
+            await sensor.instance.on_start()
+
+        # Save the state after processing
         await cbpi.actor.save()
-        logging.info(f"Successfully processed {len(gpio_actors)} GPIO actors.")
+        await cbpi.sensor.save()
+
+        logging.info(f"Successfully processed {len(gpio_actors)} GPIO actors and {len(adc_sensors)} ADC Flow Volume Sensors.")
     except Exception as e:
-        logging.error(f"Error processing GPIO actors: {str(e)}")
+        logging.error(f"Error processing GPIO actors or ADC Flow Volume Sensors: {str(e)}")
         raise
+
 
 
 @parameters([
@@ -237,4 +249,4 @@ def setup(cbpi):
     
     cbpi.plugin.register("SimplePumpActor", SimplePumpActor)
     
-    cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_gpio_actors(cbpi)))
+    cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_sensors_and_gpio_actors(cbpi)))
