@@ -117,20 +117,18 @@ class Flowmeter_Config(CBPiExtension):
 
 
 
-
 @parameters([
     Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
-    Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
-    Property.Select(label="Display", options=["Total volume", "Flow, unit/s"], description="What to display"),
+    Property.Select(label="Sensor Mode", options=["Flow", "Volume", "ADC"], description="The mode of the sensor"),
     Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
-    Property.Number(label="Alpha", configurable=True, description="Smoothing factor for EMA (0 < alpha <= 1)", default_value=0.2)
+    Property.Number(label="Alpha", configurable=True, description="Smoothing factor for EMA (0 < alpha <= 1)", default_value=0.2),
+    Property.Select(label="Unit Type", options=["L", "gal(us)", "gal(uk)", "qt"], description="Select the unit of measurement")
 ])
 class ADCFlowVolumeSensor(CBPiSensor):
     def __init__(self, cbpi, id, props):
         super(ADCFlowVolumeSensor, self).__init__(cbpi, id, props)
         self.adc_pin = int(props.get("ADC Pin", 0))
         self.sensor_mode = props.get("Sensor Mode", "Flow")
-        self.display = props.get("Display", "Total volume")
         self.simulation_mode = str(props.get("Simulation Mode", "False")).lower() == "true"
         self.value = 0
         self.total_volume = 0
@@ -138,6 +136,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
         self.alpha = float(props.get("Alpha", 0.2))  # Smoothing factor for EMA
         self.ema_flow_rate = None  # Initialize EMA flow rate as None
         self.current_adc_value = 0
+        self.unit_type = props.get("Unit Type", "L")  # Unit type selection
 
         # Polynomial coefficients for flow rate calculation
         self.poly_coefficients = [-1.31526155e-06,  2.31059924e-02,  1.35807496e-01]
@@ -197,13 +196,12 @@ class ADCFlowVolumeSensor(CBPiSensor):
             self.total_volume += volume_increment
 
             # Display logic
-            if self.sensor_mode == "Flow":
-                if self.display == "Flow, unit/s":
-                    self.value = self.convert(flow_rate)  # Use raw instantaneous flow rate for display
-                else:  # "Total volume"
-                    self.value = self.convert(self.total_volume)
+            if self.sensor_mode == "ADC":
+                self.value = adc_value  # Display raw ADC value
+            elif self.sensor_mode == "Flow":
+                self.value = self.convert(flow_rate)  # Display raw instantaneous flow rate
             else:  # "Volume" mode
-                self.value = self.convert(self.total_volume)
+                self.value = self.convert(self.total_volume)  # Display total volume
 
             # Update the global dictionary with the latest flow rate
             flowmeter_data[self.id] = flow_rate
@@ -213,12 +211,11 @@ class ADCFlowVolumeSensor(CBPiSensor):
             await asyncio.sleep(1)
 
     def convert(self, value):
-        unit = self.cbpi.config.get("flowunit", "L")
-        if unit == "gal(us)":
+        if self.unit_type == "gal(us)":
             value = value * 0.264172052
-        elif unit == "gal(uk)":
+        elif self.unit_type == "gal(uk)":
             value = value * 0.219969157
-        elif unit == "qt":
+        elif self.unit_type == "qt":
             value = value * 1.056688
         return round(value, 2)
 
@@ -231,6 +228,7 @@ class ADCFlowVolumeSensor(CBPiSensor):
         self.ema_flow_rate = None  # Reset the EMA calculation
         logger.info("Flow sensor reset")
         return "OK"
+
 
 @parameters([
     Property.Number(label="Volume", description="Volume limit for this step", configurable=True),
