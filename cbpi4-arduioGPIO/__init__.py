@@ -7,6 +7,9 @@ from .FlowMeters import ADCFlowVolumeSensor, FlowStep, Flowmeter_Config  # Impor
 from .arduinoPWMpump import PumpActor,ardunoPumpVolumeStep,arduinoPumpCoolStep,SimplePumpActor
 
 
+from .pressureSensor import PressureSensor
+
+
 
 
 
@@ -248,5 +251,7 @@ def setup(cbpi):
     cbpi.plugin.register("arduinoPumpCoolStep", arduinoPumpCoolStep)
     
     cbpi.plugin.register("SimplePumpActor", SimplePumpActor)
+    
+    cbpi.plugin.register("PressureSensor", PressureSensor)
     
     cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_sensors_and_gpio_actors(cbpi)))
