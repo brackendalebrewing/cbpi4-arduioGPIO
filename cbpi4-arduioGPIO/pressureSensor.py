@@ -92,7 +92,7 @@ class PressureSensor(CBPiSensor):
     async def read_adc(self):
         if self.simulation_mode:
             # Increment the simulated ADC value
-            self.simulated_adc_value += 100
+            self.simulated_adc_value += 1
 
             # Ensure the value stays within the range of 0 to 1024
             if self.simulated_adc_value >= 1024:
@@ -173,3 +173,62 @@ class PressureSensor(CBPiSensor):
 
 def setup(cbpi):
     cbpi.plugin.register("PressureSensor", PressureSensor)
+    
+    
+
+@parameters([
+    Property.Sensor(label="Volume Sensor", description="Select the volume sensor to calculate flow from."),
+    Property.Select(label="Flow Unit", options=['Liters/min', 'Gallons/min'], description="Select the unit of flow measurement."),
+    Property.Select(label="Volume Unit", options=['Liters', 'Gallons'], description="Select the unit of volume measurement."),
+])
+class FlowFromVolumeSensor(CBPiSensor):
+
+    def __init__(self, cbpi, id, props):
+        super(FlowFromVolumeSensor, self).__init__(cbpi, id, props)
+        self.volume_sensor = self.props.get("Volume Sensor", None)
+        self.flow_unit = self.props.get("Flow Unit", "Liters/min")
+        self.volume_unit = self.props.get("Volume Unit", "Liters")
+        self.previous_volume = None
+        self.previous_time = time.time()
+        self.flow_rate = 0
+
+        # Conversion factors
+        self.volume_conversion_factor = 3.78541 if self.volume_unit == 'Gallons' else 1  # Liters to Gallons
+        self.flow_conversion_factor = 0.264172 if self.flow_unit == 'Gallons/min' else 1  # Liters/min to Gallons/min
+
+        logging.info(f"FlowFromVolumeSensor initialized with volume sensor: {self.volume_sensor}, volume unit: {self.volume_unit}, flow unit: {self.flow_unit}")
+
+    def get_state(self):
+        return dict(value=self.flow_rate)
+
+    async def run(self):
+        while self.running:
+            try:
+                if self.volume_sensor:
+                    current_volume = self.cbpi.sensor.get_sensor_value(self.volume_sensor).get("value")
+                    current_time = time.time()
+
+                    if current_volume is not None and self.previous_volume is not None:
+                        # Convert volume to Liters if necessary
+                        current_volume *= self.volume_conversion_factor
+
+                        # Calculate flow rate
+                        volume_change = current_volume - self.previous_volume
+                        time_change = (current_time - self.previous_time) / 60  # Convert to minutes
+                        self.flow_rate = (volume_change / time_change) * self.flow_conversion_factor
+
+                        logging.info(f"Calculated flow rate: {self.flow_rate} {self.flow_unit}")
+
+                    # Update previous values for next iteration
+                    self.previous_volume = current_volume
+                    self.previous_time = current_time
+
+                else:
+                    logging.info("No volume sensor selected for flow calculation")
+
+            except Exception as e:
+                logging.error(f"Error in FlowFromVolumeSensor plugin (ID: {self.volume_sensor}): {e}")
+
+            self.push_update(self.flow_rate)
+            await asyncio.sleep(1)
+    

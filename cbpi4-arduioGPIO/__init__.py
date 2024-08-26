@@ -8,7 +8,7 @@ from .arduinoPWMpump import PumpActor,ardunoPumpVolumeStep,arduinoPumpCoolStep,S
 
 
 
-from .pressureSensor import PressureSensor
+from .pressureSensor import PressureSensor ,FlowFromVolumeSensor
 
 
 
@@ -256,6 +256,9 @@ def setup(cbpi):
     cbpi.plugin.register("PressureSensor", PressureSensor)
     
     cbpi.plugin.register("Volume From Flow Sensor", VolumeFromFlowSensor)
+    cbpi.plugin.register("Flow From VolumeSensor", FlowFromVolumeSensor)
+    
+    
     
     cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_sensors_and_gpio_actors(cbpi)))
 
