@@ -3,6 +3,7 @@ import asyncio
 import random
 import time
 from cbpi.api import *
+from cbpi.api import action
 from cbpi.api.dataclasses import NotificationAction, NotificationType
 from cbpi.api.dataclasses import Sensor, Kettle, Props
 from cbpi.api.config import ConfigType
@@ -228,6 +229,86 @@ class ADCFlowVolumeSensor(CBPiSensor):
         self.ema_flow_rate = None  # Reset the EMA calculation
         logger.info("Flow sensor reset")
         return "OK"
+    
+
+@parameters([
+    Property.Sensor(label="Flow Sensor", description="Select the flow sensor to calculate volume from."),
+    Property.Select(label="Flow Unit", options=['Liters', 'Gallons'], description="Select the unit of flow measurement."),
+    Property.Select(label="Volume Unit", options=['Liters', 'Gallons'], description="Select the unit of volume output."),
+    Property.Number(label="Alpha", configurable=True, default_value=0.2, description="Smoothing factor for EMA (0 < Alpha <= 1)")
+])
+class VolumeFromFlowSensor(CBPiSensor):
+
+    def __init__(self, cbpi, id, props):
+        super(VolumeFromFlowSensor, self).__init__(cbpi, id, props)
+        self.value = 0      
+        self.sensor = self.props.get("Flow Sensor", None)
+        self.flow_unit = self.props.get("Flow Unit", "Liters")
+        self.volume_unit = self.props.get("Volume Unit", "Liters")
+        self.alpha = float(self.props.get("Alpha", 0.2))  # Smoothing factor for EMA
+        self.ema_flow_rate = None
+        self.total_volume = 0
+        self.last_time = time.time()  # Initialize last time
+        self.flow_conversion_factor = 3.78541 if self.flow_unit == 'Gallons' else 1
+        self.volume_conversion_factor = 0.264172 if self.volume_unit == 'Gallons' else 1
+        
+        logging.info(f"VolumeFromFlowSensor initialized with sensor: {self.sensor}, flow unit: {self.flow_unit}, volume unit: {self.volume_unit}, alpha: {self.alpha}")
+
+    def get_state(self):
+        return dict(value=self.value)
+
+    @action(key="ResetVolume", parameters=[])
+    async def reset_volume(self, **kwargs):
+        """
+        Reset the total volume to 0.
+        """
+        self.reset()
+        logging.info("Flow volume has been reset to 0.")
+
+    def reset(self):
+        """
+        Resets the volume to 0 and updates the state.
+        """
+        self.total_volume = 0
+        self.value = 0
+        self.push_update(self.value)
+
+    async def run(self):
+        while self.running:
+            try:
+                if self.sensor:
+                    sensor_value = self.cbpi.sensor.get_sensor_value(self.sensor).get("value")
+                    if sensor_value is not None:
+                        sensor_value *= self.flow_conversion_factor  # Convert flow unit if necessary
+                        
+                        # Update EMA of the flow rate
+                        self.update_ema(sensor_value)
+                        
+                        # Volume calculation using EMA-smoothed flow rate
+                        current_time = time.time()
+                        time_diff = current_time - self.last_time
+                        volume_increment = self.ema_flow_rate * (time_diff / 60)
+                        self.total_volume += volume_increment
+                        self.last_time = current_time
+
+                        self.value = round(self.total_volume * self.volume_conversion_factor, 2)  # Convert volume unit if necessary
+                    else:
+                        logging.info(f"No value fetched from the selected flow sensor (ID: {self.sensor}), check connection and setup")
+                else:
+                    logging.info("No flow sensor selected for volume calculation")
+
+            except Exception as e:
+                logging.error(f"Error in VolumeFromFlowSensor plugin (ID: {self.sensor}): {e}")
+
+            self.push_update(self.value)
+            await asyncio.sleep(1)
+
+    def update_ema(self, flow_rate):
+        if self.ema_flow_rate is None:
+            self.ema_flow_rate = flow_rate  # Initialize with the first value
+        else:
+            self.ema_flow_rate = self.alpha * flow_rate + (1 - self.alpha) * self.ema_flow_rate
+
 
 
 @parameters([

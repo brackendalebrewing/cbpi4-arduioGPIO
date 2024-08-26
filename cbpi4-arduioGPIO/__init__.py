@@ -2,9 +2,10 @@ import asyncio
 import logging
 from cbpi.api import CBPiActor, CBPiExtension, Property, action, parameters
 from .TelemetrixAioService import TelemetrixAioService
-from .FlowMeters import ADCFlowVolumeSensor, FlowStep, Flowmeter_Config  # Import the flow meter classes
+from .FlowMeters import ADCFlowVolumeSensor, FlowStep, Flowmeter_Config ,VolumeFromFlowSensor # Import the flow meter classes
 
 from .arduinoPWMpump import PumpActor,ardunoPumpVolumeStep,arduinoPumpCoolStep,SimplePumpActor
+
 
 
 from .pressureSensor import PressureSensor
@@ -254,4 +255,9 @@ def setup(cbpi):
     
     cbpi.plugin.register("PressureSensor", PressureSensor)
     
+    cbpi.plugin.register("Volume From Flow Sensor", VolumeFromFlowSensor)
+    
     cbpi.register_on_startup(lambda: asyncio.create_task(resave_and_reload_sensors_and_gpio_actors(cbpi)))
+
+
+
