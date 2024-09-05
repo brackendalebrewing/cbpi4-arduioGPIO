@@ -118,117 +118,155 @@ class Flowmeter_Config(CBPiExtension):
 
 
 
-@parameters([
-    Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
-    Property.Select(label="Sensor Mode", options=["Flow", "Volume", "ADC"], description="The mode of the sensor"),
-    Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
-    Property.Number(label="Alpha", configurable=True, description="Smoothing factor for EMA (0 < alpha <= 1)", default_value=0.2),
-    Property.Select(label="Unit Type", options=["L", "gal(us)", "gal(uk)", "qt"], description="Select the unit of measurement")
-])
+
+
 class ADCFlowVolumeSensor(CBPiSensor):
     def __init__(self, cbpi, id, props):
         super(ADCFlowVolumeSensor, self).__init__(cbpi, id, props)
+
         self.adc_pin = int(props.get("ADC Pin", 0))
         self.sensor_mode = props.get("Sensor Mode", "Flow")
         self.simulation_mode = str(props.get("Simulation Mode", "False")).lower() == "true"
-        self.value = 0
+        self.alpha = float(props.get("Alpha", 0.2))  # Smoothing factor for EMA
+        self.unit_type = props.get("Unit Type", "L")  # Unit type selection
+        self.ema_flow_rate = None
         self.total_volume = 0
         self.last_time = time.time()
-        self.alpha = float(props.get("Alpha", 0.2))  # Smoothing factor for EMA
-        self.ema_flow_rate = None  # Initialize EMA flow rate as None
-        self.current_adc_value = 0
-        self.unit_type = props.get("Unit Type", "L")  # Unit type selection
 
-        # Polynomial coefficients for flow rate calculation
-        self.poly_coefficients = [-1.31526155e-06,  2.31059924e-02,  1.35807496e-01]
+        # Zero offset and polynomial coefficients (initialized)
+        self.zero_offset = 0
+        self.poly_coefficients = None
+
+        # Path to the plugin directory
+        plugin_directory = os.path.dirname(__file__)
+        self.calibration_file = os.path.join(plugin_directory, 'flowmeter_calibration.json')
+
+        # Log the calibration file path
+        logger.info(f"Calibration file will be saved at: {self.calibration_file}")
+
+        # Load calibration data from JSON (or create default if not found)
+        self.load_calibration_data()
+
+    def load_calibration_data(self):
+        """
+        Load calibration data (ADC values, flow rates, zero offset) from a JSON file.
+        If the file is not found, create a default calibration file and notify the user.
+        This method also computes the polynomial coefficients for flow rate calculation.
+        """
+        try:
+            with open(self.calibration_file, 'r') as file:
+                calibration_data = json.load(file)
+                self.zero_offset = calibration_data.get("zero_offset", 0)
+                adc_values = calibration_data["adc_values"]
+                flow_rates = calibration_data["flow_rates"]
+
+                # Fit a second-degree polynomial (quadratic) based on the calibration data
+                self.poly_coefficients = np.polyfit(adc_values, flow_rates, 2)
+
+                logger.info("Calibration data successfully loaded from %s. Polynomial coefficients: %s", self.calibration_file, self.poly_coefficients)
+
+        except FileNotFoundError:
+            # Calibration file not found, create a default one
+            logger.warning("Calibration file not found. Creating a default calibration file in %s.", self.calibration_file)
+            self.create_default_calibration_file()
+
+        except (KeyError, ValueError) as e:
+            logger.error("Failed to load calibration data due to invalid format: %s", e)
+
+    def create_default_calibration_file(self):
+        """
+        Create a default calibration JSON file with basic calibration data.
+        """
+        default_data = {
+            "zero_offset": 0,  # No offset for the default
+            "adc_values": [0, 210, 500, 770, 1000],  # Default ADC values
+            "flow_rates": [0, 5.20, 11.25, 17.05, 22.0]  # Default flow rates
+        }
+
+        try:
+            with open(self.calibration_file, 'w') as file:
+                json.dump(default_data, file, indent=4)
+                logger.info("Default calibration file created at '%s'. Please update for accurate calibration.", self.calibration_file)
+
+            # Load the default data for use
+            self.zero_offset = default_data["zero_offset"]
+            adc_values = default_data["adc_values"]
+            flow_rates = default_data["flow_rates"]
+
+            # Fit a second-degree polynomial (quadratic)
+            self.poly_coefficients = np.polyfit(adc_values, flow_rates, 2)
+
+        except IOError as e:
+            logger.error("Failed to create default calibration file: %s", e)
+
+    def adc_to_flow(self, adc_value):
+        """
+        Convert an ADC value to a flow rate using the calibrated polynomial coefficients and zero offset.
+        """
+        # Apply zero offset to the ADC value
+        calibrated_adc_value = adc_value - self.zero_offset
+
+        # If polynomial coefficients are loaded, calculate the flow rate
+        if self.poly_coefficients is not None:
+            flow_rate = np.polyval(self.poly_coefficients, calibrated_adc_value)
+            return max(0, flow_rate)  # Ensure flow rate is non-negative
+        else:
+            logger.warning("Polynomial coefficients not loaded. Cannot calculate flow rate.")
+            return 0
+
+    async def read_adc(self):
+        """
+        Read the ADC value from the sensor (simulation mode or real sensor).
+        In simulation mode, returns a fake ADC value.
+        """
+        if self.simulation_mode:
+            return np.random.uniform(0, 1023)  # Simulate a 10-bit ADC range
+        try:
+            return self.current_adc_value  # Replace this with actual ADC reading logic
+        except AttributeError:
+            logger.error("ADC value not set by callback yet")
+            return 0
+
+    async def run(self):
+        """
+        The main loop that reads ADC values and calculates the flow rate in real-time.
+        """
+        while self.running:
+            adc_value = await self.read_adc()  # Read the ADC value
+            flow_rate = self.adc_to_flow(adc_value)  # Calculate the flow rate using the polynomial
+
+            # Apply smoothing (EMA) to the flow rate
+            self.update_ema(flow_rate)
+
+            # Volume calculation using the smoothed flow rate
+            current_time = time.time()
+            time_diff = current_time - self.last_time
+            volume_increment = self.ema_flow_rate * (time_diff / 60)  # Convert to liters/minute
+
+            self.total_volume += volume_increment
+
+            # Set value to be displayed based on the mode (ADC, Flow, or Volume)
+            if self.sensor_mode == "ADC":
+                self.value = adc_value  # Show raw ADC value
+            elif self.sensor_mode == "Flow":
+                self.value = round(flow_rate, 2)  # Show current flow rate
+            else:  # Volume mode
+                self.value = round(self.total_volume, 2)  # Show total volume
+
+            # Push the updated value to the system
+            self.push_update(self.value)
+            self.last_time = current_time
+            await asyncio.sleep(1)
 
     def update_ema(self, flow_rate):
+        """
+        Update the Exponential Moving Average (EMA) for flow rate smoothing.
+        """
         if self.ema_flow_rate is None:
             self.ema_flow_rate = flow_rate  # Initialize with the first value
         else:
             self.ema_flow_rate = self.alpha * flow_rate + (1 - self.alpha) * self.ema_flow_rate
 
-    async def on_start(self):
-        if not self.simulation_mode:
-            try:
-                await TelemetrixAioService.initialize(self.cbpi.config.get)
-                self.board = TelemetrixAioService.get_arduino_instance()
-                await self.board.set_pin_mode_analog_input(self.adc_pin, 1, self.analog_callback)
-                logger.info(f"ADC pin {self.adc_pin} initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize ADC pin {self.adc_pin}: {str(e)}")
-        else:
-            logger.info("Sensor running in simulation mode")
-
-    async def analog_callback(self, data):
-        self.current_adc_value = data[2]
-        formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(data[3]))
-        logger.debug(f'Analog Call Input Callback: pin={data[1]}, Value={data[2]} Time={formatted_time} (Raw Time={data[3]})')
-
-    async def read_adc(self):
-        if self.simulation_mode:
-            fake = random.uniform(0, 1023)  # Simulating 10-bit ADC
-            return fake
-            
-        try:
-            return self.current_adc_value
-        except AttributeError:
-            logger.error("ADC value not set by callback yet")
-            return 0
-
-    def adc_to_flow(self, adc_value):
-        # Calculate the flow rate using the polynomial equation
-        flow_rate = np.polyval(self.poly_coefficients, adc_value)
-        return max(0, flow_rate)  # Ensure flow rate is not negative
-
-    async def run(self):
-        while self.running:
-            adc_value = await self.read_adc()
-            flow_rate = self.adc_to_flow(adc_value)  # Calculate instantaneous flow rate
-
-            # Only use EMA for volume calculation, not for instantaneous flow rate display
-            self.update_ema(flow_rate)
-
-            # Volume calculation using EMA-smoothed flow rate
-            current_time = time.time()
-            time_diff = current_time - self.last_time
-            volume_increment = self.ema_flow_rate * (time_diff / 60)  # Convert to liters
-
-            self.total_volume += volume_increment
-
-            # Display logic
-            if self.sensor_mode == "ADC":
-                self.value = adc_value  # Display raw ADC value
-            elif self.sensor_mode == "Flow":
-                self.value = self.convert(flow_rate)  # Display raw instantaneous flow rate
-            else:  # "Volume" mode
-                self.value = self.convert(self.total_volume)  # Display total volume
-
-            # Update the global dictionary with the latest flow rate
-            flowmeter_data[self.id] = flow_rate
-
-            self.push_update(self.value)
-            self.last_time = current_time
-            await asyncio.sleep(1)
-
-    def convert(self, value):
-        if self.unit_type == "gal(us)":
-            value = value * 0.264172052
-        elif self.unit_type == "gal(uk)":
-            value = value * 0.219969157
-        elif self.unit_type == "qt":
-            value = value * 1.056688
-        return round(value, 2)
-
-    def get_state(self):
-        return dict(value=self.value)
-
-    def reset(self):
-        self.total_volume = 0
-        self.value = 0
-        self.ema_flow_rate = None  # Reset the EMA calculation
-        logger.info("Flow sensor reset")
-        return "OK"
     
 
 @parameters([
