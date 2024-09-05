@@ -46,15 +46,20 @@ async def resave_and_reload_sensors_and_gpio_actors(cbpi):
             logging.info(f"Processing ADC Flow Volume Sensor {sensor.id}")
             await sensor.instance.on_start()
 
+        # Process Pressure Sensors
+        pressure_sensors = [sensor for sensor in cbpi.sensor.data if isinstance(sensor.instance, PressureSensor)]
+        for sensor in pressure_sensors:
+            logging.info(f"Processing Pressure Sensor {sensor.id}")
+            await sensor.instance.on_start()
+
         # Save the state after processing
         await cbpi.actor.save()
         await cbpi.sensor.save()
 
-        logging.info(f"Successfully processed {len(gpio_actors)} GPIO actors and {len(adc_sensors)} ADC Flow Volume Sensors.")
+        logging.info(f"Successfully processed {len(gpio_actors)} GPIO actors, {len(adc_sensors)} ADC Flow Volume Sensors, and {len(pressure_sensors)} Pressure Sensors.")
     except Exception as e:
-        logging.error(f"Error processing GPIO actors or ADC Flow Volume Sensors: {str(e)}")
+        logging.error(f"Error processing GPIO actors, ADC Flow Volume Sensors, or Pressure Sensors: {str(e)}")
         raise
-
 
 
 @parameters([

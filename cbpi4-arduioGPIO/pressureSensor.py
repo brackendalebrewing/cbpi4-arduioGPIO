@@ -4,11 +4,17 @@ import asyncio
 import time
 from cbpi.api import *
 from cbpi.api.dataclasses import NotificationAction, NotificationType
+from collections import deque
+
+from .TelemetrixAioService import TelemetrixAioService
 
 logger = logging.getLogger(__name__)
 
+
+
+
 @parameters([
-    Property.Select(label="ADCPin", options=[1, 2, 3, 4, 5], description="Select the ADC pin (1-5)"),
+    Property.Select(label="ADCPin", options=[0,1, 2, 3, 4, 5], description="Select the ADC pin (1-5)"),
     Property.Select("sensorType", options=["ADC",  "Pressure", "Liquid Level", "Volume"], description="Select which type of data to register for this sensor"),
     Property.Select("pressureType", options=["kPa", "PSI"]),
     Property.Number("adcLow", configurable=True, default_value=0, description="ADC value at minimum pressure, usually 0"),
@@ -18,7 +24,9 @@ logger = logging.getLogger(__name__)
     Property.Number("sensorHeight", configurable=True, default_value=0, description="Location of Sensor from the bottom of the kettle in inches"),
     Property.Number("kettleDiameter", configurable=True, default_value=0, description="Diameter of kettle in inches"),
     Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
-    Property.Select(label="Volume Unit", options=["Gallons", "Liters"], description="Select the unit for volume measurement")
+    Property.Select(label="Volume Unit", options=["Gallons", "Liters"], description="Select the unit for volume measurement"),
+    Property.Number("sampleRate", configurable=True, default_value=1, description="Sample rate in Hz"),
+    Property.Number("averageWindowSize", configurable=True, default_value=5, description="Number of samples to average for running average")
 ])
 class PressureSensor(CBPiSensor):
 
@@ -28,7 +36,7 @@ class PressureSensor(CBPiSensor):
         # ADC related properties
         self.adc_pin = int(props.get("ADCPin", 1))
         self.simulation_mode = str(props.get("Simulation Mode", "False")).lower() == "true"
-        self.current_adc_value = 0
+        self.current_adc_value = None
         
         # Initialize the simulated ADC value for the simulation mode
         self.simulated_adc_value = 0
@@ -49,8 +57,7 @@ class PressureSensor(CBPiSensor):
         self.pressureHigh = self.convert_pressure(int(self.props.get("pressureHigh", 10)))
         self.pressureLow = self.convert_pressure(int(self.props.get("pressureLow", 0)))
         self.volume_unit = self.props.get("Volume Unit", "Gallons")
-        logger.info(f" **************************** Volume unit set to {self.volume_unit}")
-
+        
         # Assuming the ADC range is from 0 to 1024
         self.adc_max = int(self.props.get("adcHigh", 1024))  # Maximum ADC value
         self.adc_min = int(self.props.get("adcLow", 0))     # Minimum ADC value
@@ -59,6 +66,12 @@ class PressureSensor(CBPiSensor):
         self.calcX = self.adc_max - self.adc_min
         self.calcM = (self.pressureHigh - self.pressureLow) / self.calcX
         self.calcB = self.pressureLow
+
+        # Sample rate and running average setup
+        self.sample_rate = float(self.props.get("sampleRate", 1))
+        self.sample_interval = 1 / self.sample_rate  # Calculate interval based on rate
+        self.average_window_size = int(self.props.get("averageWindowSize", 5))
+        self.adc_values = deque(maxlen=self.average_window_size)
 
     def convert_pressure(self, value):
         if self.props.get("pressureType", "kPa") == "PSI":
@@ -77,8 +90,9 @@ class PressureSensor(CBPiSensor):
             try:
                 await TelemetrixAioService.initialize(self.cbpi.config.get)
                 self.board = TelemetrixAioService.get_arduino_instance()
-                await self.board.set_pin_mode_analog_input(self.adc_pin, 1, self.analog_callback)
-                logger.info(f"ADC pin {self.adc_pin} initialized successfully")
+                await self.board.set_pin_mode_analog_input(self.adc_pin,5, self.analog_callback)
+                logger.debug(f"ADC pin {self.adc_pin} initialized successfully")
+                await self.board.disable_analog_reporting(self.adc_pin)  # Initially disable reporting
             except Exception as e:
                 logger.error(f"Failed to initialize ADC pin {self.adc_pin}: {str(e)}")
         else:
@@ -87,7 +101,9 @@ class PressureSensor(CBPiSensor):
     async def analog_callback(self, data):
         self.current_adc_value = data[2]
         formatted_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(data[3]))
-        logger.debug(f'Analog Callback: pin={data[1]}, Value={data[2]} Time={formatted_time}')
+        logger.debug(f'pressure Analog Call Input Callback: pin={data[1]}, Value={data[2]} Time={formatted_time} ')
+
+        await self.board.disable_analog_reporting(self.adc_pin)  # Disable immediately after capturing the first sample
 
     async def read_adc(self):
         if self.simulation_mode:
@@ -100,28 +116,38 @@ class PressureSensor(CBPiSensor):
             logger.debug(f"simulated_adc_value--> {self.simulated_adc_value} ")
             return self.simulated_adc_value
 
-        try:
-            return self.current_adc_value
-        except AttributeError:
-            logger.error("ADC value not set by callback yet")
+        if self.current_adc_value is not None:
+            value = self.current_adc_value
+            self.current_adc_value = None  # Reset for the next sampling period
+            return value
+        else:
+            logger.error("ADC value not captured yet")
             return 0
 
+    def calculate_running_average(self, new_value):
+        self.adc_values.append(new_value)
+        average_value = sum(self.adc_values) / len(self.adc_values)
+        logger.debug(f"pressure Running Average ADC Value: {average_value}")
+        return average_value
+
     async def run(self):
-        while self.running is True:
+        while self.running:
             try:
+                await self.board.enable_analog_reporting(self.adc_pin)
+                await asyncio.sleep(0.1)  # Allow a brief time to capture a single sample
                 adc_value = await self.read_adc()
 
-                pressureValue = (self.calcM * adc_value) + self.calcB
+                average_adc_value = self.calculate_running_average(adc_value)
+
+                pressureValue = (self.calcM * average_adc_value) + self.calcB
                 liquidLevel = self.calculate_liquid_level(pressureValue)
                 volume = self.calculate_volume(liquidLevel)
-                logger.info(f"run   Sensor {self.id} - liquid Vol liters--> {volume}") 
+                logger.debug(f"run   Sensor {self.id} - liquid Vol liters--> {volume}") 
                 
-                
-
                 sensor_type = self.props.get("sensorType", "Liquid Level")
-                logger.info(f"run   Sensor type  {self.id} ---> {sensor_type}") 
+                logger.debug(f"run   Sensor type  {self.id} ---> {sensor_type}") 
                 if sensor_type == "ADC":
-                    self.value = adc_value
+                    self.value = average_adc_value
                 elif sensor_type == "Pressure":
                     self.value = pressureValue
                 elif sensor_type == "Liquid Level":
@@ -129,7 +155,7 @@ class PressureSensor(CBPiSensor):
                 elif sensor_type == "Volume":
                     self.value = volume
                 else:
-                    self.value = adc_value  # Default to ADC
+                    self.value = average_adc_value  # Default to ADC
 
                 self.push_update(self.value)
             except Exception as e:
@@ -137,20 +163,20 @@ class PressureSensor(CBPiSensor):
                 self.value = None
                 self.push_update(self.value)
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.sample_interval)  # Use the interval derived from sample rate
 
     def calculate_liquid_level(self, pressureValue):
         liquidLevel = ((self.convert_bar(pressureValue) / self.GRAVITY) * 100000) / self.inch_mm
         if liquidLevel > 0.49:
             liquidLevel += self.sensorHeight
-        logger.debug(f"liquidLevel--> {liquidLevel} ")    
+        logger.debug(f"liquidLevel--> {liquidLevel}")    
         return liquidLevel
 
     def calculate_volume(self, liquidLevel):
         kettleRadius = self.kettleDiameter / 2
         radiusSquared = kettleRadius * kettleRadius
         volumeCI = self.PI * radiusSquared * liquidLevel
-        logger.info(f"  ******************* calculate_volume--> unit set to {self.volume_unit}")
+        logger.debug(f"  ******************* calculate_volume--> unit set to {self.volume_unit}")
         if self.volume_unit == "Liters":
             logger.debug(f"Sensor {self.id} - liquid Vol liters--> {volumeCI / self.liters_cubicinch}") 
             return volumeCI / self.liters_cubicinch
@@ -158,23 +184,16 @@ class PressureSensor(CBPiSensor):
             logger.debug(f"Sensor {self.id} - liquid Vol gal--> {volumeCI / self.gallons_cubicinch}")
             return volumeCI / self.gallons_cubicinch
 
-            
-            
-        
-        
-
     def get_state(self):
         return dict(value=self.value)
 
     def reset(self):
         self.value = 0
-        logger.info("Pressure sensor reset")
+        logger.debug("Pressure sensor reset")
         return "OK"
 
 def setup(cbpi):
     cbpi.plugin.register("PressureSensor", PressureSensor)
-    
-    
 
 @parameters([
     Property.Sensor(label="Volume Sensor", description="Select the volume sensor to calculate flow from."),
@@ -217,7 +236,7 @@ class FlowFromVolumeSensor(CBPiSensor):
                         time_change = (current_time - self.previous_time) / 60  # Convert to minutes
                         self.flow_rate = (volume_change / time_change) * self.flow_conversion_factor
 
-                        logging.info(f"Calculated flow rate: {self.flow_rate} {self.flow_unit}")
+                        logging.debug(f"Calculated flow rate: {self.flow_rate} {self.flow_unit}")
 
                     # Update previous values for next iteration
                     self.previous_volume = current_volume
