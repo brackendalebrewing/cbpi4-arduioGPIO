@@ -128,6 +128,16 @@ from cbpi.api import CBPiSensor, Property, parameters
 
 logger = logging.getLogger(__name__)
 
+import os
+import time
+import json
+import numpy as np
+import logging
+import asyncio
+from cbpi.api import *
+
+logger = logging.getLogger(__name__)
+
 @parameters([
     Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
     Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
@@ -250,37 +260,36 @@ class ADCFlowVolumeSensor(CBPiSensor):
             adc_value = await self.read_adc()  # Read the ADC value
             flow_rate = self.adc_to_flow(adc_value)  # Calculate the flow rate using the polynomial
 
-            # Apply smoothing (EMA) to the flow rate
-            self.update_ema(flow_rate)
-
-            # Volume calculation using the smoothed flow rate
+            # Volume calculation using the raw flow rate (without smoothing)
             current_time = time.time()
             time_diff = current_time - self.last_time
-            volume_increment = self.ema_flow_rate * (time_diff / 60)  # Convert to liters/minute
+            volume_increment = flow_rate * (time_diff / 60)  # Convert to liters/minute
 
-            self.total_volume += volume_increment
+            # Apply smoothing (EMA) to the total volume
+            self.update_ema(volume_increment)
 
-            # Set value to be displayed based on the mode (ADC, Flow, or Volume)
-            if self.sensor_mode == "ADC":
-                self.value = adc_value  # Show raw ADC value
-            elif self.sensor_mode == "Flow":
-                self.value = round(flow_rate, 2)  # Show current flow rate
+            # Update total volume with the smoothed increment
+            self.total_volume += self.ema_flow_rate
+
+            # Set value to be displayed based on the mode (Flow or Volume)
+            if self.sensor_mode == "Flow":
+                self.value = round(flow_rate, 2)  # Show current flow rate (unsmoothed)
             else:  # Volume mode
-                self.value = round(self.total_volume, 2)  # Show total volume
+                self.value = round(self.total_volume, 2)  # Show smoothed total volume
 
             # Push the updated value to the system
             self.push_update(self.value)
             self.last_time = current_time
             await asyncio.sleep(1)
 
-    def update_ema(self, flow_rate):
+    def update_ema(self, volume_increment):
         """
-        Update the Exponential Moving Average (EMA) for flow rate smoothing.
+        Update the Exponential Moving Average (EMA) for volume smoothing.
         """
         if self.ema_flow_rate is None:
-            self.ema_flow_rate = flow_rate  # Initialize with the first value
+            self.ema_flow_rate = volume_increment  # Initialize with the first value
         else:
-            self.ema_flow_rate = self.alpha * flow_rate + (1 - self.alpha) * self.ema_flow_rate
+            self.ema_flow_rate = self.alpha * volume_increment + (1 - self.alpha) * self.ema_flow_rate
 
 
 @parameters([
