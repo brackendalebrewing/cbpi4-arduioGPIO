@@ -118,8 +118,23 @@ class Flowmeter_Config(CBPiExtension):
 
 
 
+import os
+import time
+import json
+import numpy as np
+import asyncio
+import logging
+from cbpi.api import CBPiSensor, Property, parameters
 
+logger = logging.getLogger(__name__)
 
+@parameters([
+    Property.Number(label="ADC Pin", configurable=True, description="The ADC pin number on the Arduino board"),
+    Property.Select(label="Sensor Mode", options=["Flow", "Volume"], description="The mode of the sensor"),
+    Property.Select(label="Display", options=["Total volume", "Flow, unit/s"], description="What to display"),
+    Property.Select(label="Simulation Mode", options=["True", "False"], description="Enable simulation mode"),
+    Property.Number(label="Alpha", configurable=True, description="Smoothing factor for EMA (0 < alpha <= 1)", default_value=0.2)
+])
 class ADCFlowVolumeSensor(CBPiSensor):
     def __init__(self, cbpi, id, props):
         super(ADCFlowVolumeSensor, self).__init__(cbpi, id, props)
@@ -267,7 +282,6 @@ class ADCFlowVolumeSensor(CBPiSensor):
         else:
             self.ema_flow_rate = self.alpha * flow_rate + (1 - self.alpha) * self.ema_flow_rate
 
-    
 
 @parameters([
     Property.Sensor(label="Flow Sensor", description="Select the flow sensor to calculate volume from."),
